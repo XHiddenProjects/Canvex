@@ -12,7 +12,6 @@ export const math = class{
     static LN10 = Math.LN10;
     static LOG2E = Math.LOG2E;
     static LOG10E = Math.LOG10E;
-    static TAU = Math.TAU;
     /**
      * Converts degrees to radians.
      * @param {number} degrees Angle in degrees.
@@ -29,19 +28,180 @@ export const math = class{
     static degrees(radians){
         return radians * (180 / Math.PI);
     }
+    /** @type {number} @private Current seeded PRNG state as an unsigned 32-bit integer. */
+    static #seed = 0x12345678;
+
+    /** @type {boolean} @private Whether the seeded PRNG should be used. */
+    static #useSeed = false;
+
+    /** @type {number|null} @private Cached second Gaussian sample from Box-Muller. */
+    static #gaussianSpare = null;
+
     /**
-     * Returns a random number within a specified range.
-     * @param {number} min Minimum value.
-     * @param {number} max Maximum value.
-     * @param {boolean} [inclusive=false] Whether to include the maximum value.
-     * @returns {number} Random number.
+     * Returns a uniform random number in the range [0, 1).
+     *
+     * If {@link math.randomSeed} has been called, this uses an internal seeded
+     * linear congruential generator (LCG). Otherwise it falls back to
+     * `Math.random()`.
+     *
+     * @returns {number} A pseudorandom number in the range [0, 1).
+     * @private
+     */
+    static #randomUnit(){
+        if (!this.#useSeed) {
+            return Math.random();
+        }
+
+        this.#seed = (1664525 * this.#seed + 1013904223) >>> 0;
+        return this.#seed / 0x100000000;
+    }
+
+    /**
+     * Returns a random value.
+     *
+     * Supported signatures:
+     * - `random()` → random number in the range [0, 1)
+     * - `random(max)` → random number in the range [0, max)
+     * - `random(min, max, inclusive)` → random number in the requested range
+     * - `random(array)` → random element from the array, or `undefined` when empty
+     *
+     * When {@link math.randomSeed} has been called, this method uses the same
+     * seeded PRNG as {@link math.randomGaussian}; otherwise it falls back to
+     * `Math.random()`.
+     *
+     * @param {number|Array<*>} [min=0] - Minimum value, maximum value, or array.
+     * @param {number} [max=1] - Maximum value when using numeric ranges.
+     * @param {boolean} [inclusive=false] - Whether to include the maximum value.
+     * @returns {*|number|undefined} A random number or a random array element.
+     * @throws {TypeError} Thrown when the provided arguments are not supported.
+     *
+     * @example
+     * math.random();
+     *
+     * @example
+     * math.random(10);
+     *
+     * @example
+     * math.random(5, 15, true);
+     *
+     * @example
+     * math.random(["red", "green", "blue"]);
      */
     static random(min = 0, max = 1, inclusive = false){
-        if (inclusive)
-            return Math.random() * (max - min + 1) + min;
-        else
-            return Math.random() * (max - min) + min;
+        if (Array.isArray(min)) {
+            if (arguments.length > 1) {
+                throw new TypeError('random(array) does not accept additional arguments');
+            }
+            if (min.length === 0) return undefined;
+            const index = Math.floor(this.#randomUnit() * min.length);
+            return min[index];
+        }
+
+        if (!Number.isFinite(min)) {
+            throw new TypeError('min must be a finite number or an array');
+        }
+
+        if (arguments.length === 1) {
+            max = min;
+            min = 0;
+        }
+
+        if (!Number.isFinite(max)) {
+            throw new TypeError('max must be a finite number');
+        }
+
+        if (typeof inclusive !== 'boolean') {
+            throw new TypeError('inclusive must be a boolean');
+        }
+
+        if (max < min) {
+            [min, max] = [max, min];
+        }
+
+        const rand = this.#randomUnit();
+        return inclusive
+            ? rand * (max - min + 1) + min
+            : rand * (max - min) + min;
     }
+
+    /**
+     * Returns a normally distributed random number.
+     *
+     * This method generates values using the Box-Muller transform.
+     *
+     * - With no arguments, it returns a value from a standard normal distribution
+     *   with mean `0` and standard deviation `1`.
+     * - With arguments, it returns a value from a normal distribution with the
+     *   specified `mean` and `standardDeviation`.
+     *
+     * If {@link math.randomSeed} was previously called, the output is reproducible.
+     *
+     * @param {number} [mean=0] - The mean (center) of the normal distribution.
+     * @param {number} [standardDeviation=1] - The standard deviation (spread) of
+     * the normal distribution. Must be greater than or equal to `0`.
+     * @returns {number} A random number sampled from the requested normal distribution.
+     * @throws {TypeError} Thrown when `mean` or `standardDeviation` is not finite.
+     * @throws {RangeError} Thrown when `standardDeviation` is negative.
+     */
+    static randomGaussian(mean = 0, standardDeviation = 1){
+        if (!Number.isFinite(mean) || !Number.isFinite(standardDeviation)) {
+            throw new TypeError('mean and standardDeviation must be finite numbers');
+        }
+
+        if (standardDeviation < 0) {
+            throw new RangeError('standardDeviation must be greater than or equal to 0');
+        }
+
+        if (standardDeviation === 0) {
+            return mean;
+        }
+
+        if (this.#gaussianSpare !== null) {
+            const spare = this.#gaussianSpare;
+            this.#gaussianSpare = null;
+            return mean + spare * standardDeviation;
+        }
+
+        let u = 0;
+        let v = 0;
+
+        while (u === 0) u = this.#randomUnit();
+        while (v === 0) v = this.#randomUnit();
+
+        const magnitude = Math.sqrt(-2.0 * Math.log(u));
+        const z0 = magnitude * Math.cos(this.TWO_PI * v);
+        const z1 = magnitude * Math.sin(this.TWO_PI * v);
+
+        this.#gaussianSpare = z1;
+        return mean + z0 * standardDeviation;
+    }
+
+    /**
+     * Sets the random seed used by seeded random functions.
+     *
+     * After calling this method, {@link math.random}, {@link math.randomInt},
+     * and {@link math.randomGaussian} become deterministic until the seed is
+     * changed again or the environment is reloaded.
+     *
+     * Calling `randomSeed()` also clears any cached Gaussian sample so that
+     * future normal samples are fully reproducible from the new seed.
+     *
+     * @param {number} seed - The seed value to use. Any finite number is accepted.
+     * The value is converted to an unsigned 32-bit integer internally.
+     * @returns {number} The normalized unsigned 32-bit seed actually stored.
+     * @throws {TypeError} Thrown when `seed` is not a finite number.
+     */
+    static randomSeed(seed){
+        if (!Number.isFinite(seed)) {
+            throw new TypeError('seed must be a finite number');
+        }
+
+        this.#seed = Math.floor(seed) >>> 0;
+        this.#useSeed = true;
+        this.#gaussianSpare = null;
+        return this.#seed;
+    }
+
     /**
      * Returns a random integer within a specified range.
      * @param {number} min Minimum value.
@@ -51,9 +211,9 @@ export const math = class{
      */
     static randomInt(min = 0, max = 1, inclusive = false){
         if (inclusive)
-            return Math.floor(Math.random() * (max - min + 1)) + min;
+            return Math.floor(this.#randomUnit() * (max - min + 1)) + min;
         else
-            return Math.floor(Math.random() * (max - min)) + min;
+            return Math.floor(this.#randomUnit() * (max - min)) + min;
     }
     /**
      * Maps a value from one range to another.

@@ -2,6 +2,8 @@ import { Canvex } from "./canvex.js";
 import { Canvas } from "./canvas.js";
 import { Image } from "./image.js";
 import { math } from "./math.js";
+import { Materials } from "./materials.js";
+import { Camera } from "./camera.js";
 
 /**
  * Utilities for building simple 2D canvas paths and drawing basic WebGL/WebGL2 primitives.
@@ -210,6 +212,7 @@ export class Shapes {
         const hasWebGL2 = typeof WebGL2RenderingContext !== "undefined" && ctx instanceof WebGL2RenderingContext;
         return hasWebGL1 || hasWebGL2;
     }
+
 
     /**
      * Validates that every provided value is a finite number.
@@ -1614,7 +1617,7 @@ export class Shapes {
      * @returns {void}
      */
     static Image(img, x, y, w, h){
-        return img.constructor._draw(img, x, y, w, h);
+        return Image._draw(img, x, y, w, h);
     }
     /**
      * Draws an ellipse on the canvas.
@@ -1686,4 +1689,1067 @@ export class Shapes {
         return vertices;
     }
 
+
+
+/**
+ * Draws a box (rectangular prism).
+ *
+ * This method requires an active WebGL/WebGL2 renderer and an active shader
+ * program with an `a_position` attribute. When the final argument is an
+ * options object containing `geometry`, the generated mesh is appended to
+ * that geometry instead of being drawn immediately.
+ *
+ * @param {number} [width=200] Box width.
+ * @param {number} [height=width] Box height.
+ * @param {number} [depth=height] Box depth.
+ * @param {number} [detailX=1] Horizontal subdivision count per face.
+ * @param {number} [detailY=1] Vertical subdivision count per face.
+ * @param {{geometry?: object, translate?: number[], rotate?: number[], scale?: number[]}} [options={}] Optional geometry capture and transform settings.
+ * @returns {object|void} The generated geometry when captured; otherwise nothing.
+ */
+static box(width, height, depth, detailX = 1, detailY = 1, options = {}) {
+    if (width  === undefined) width  = 50;
+    if (height === undefined) height = width;
+    if (depth  === undefined) depth  = height;
+    const w = Number(width);
+    const h = Number(height);
+    const d = Number(depth);
+    const geometry = this.#buildBoxGeometry3D(w, h, d, detailX, detailY);
+    return this.#commitOrDrawGeometry3D(geometry, options);
+}
+
+/**
+ * Creates a custom geometry object from simpler 3D shapes.
+ *
+ * The callback receives a builder with methods matching the primitive APIs:
+ * `box()`, `plane()`, `sphere()`, `ellipsoid()`, `cylinder()`, `cone()`,
+ * and `torus()`. Each builder call accepts an optional final transform
+ * object such as `{ translate: [x, y, z], rotate: [rx, ry, rz], scale: [...] }`.
+ *
+ * @param {Function|Array<object>} builder Builder callback or an array of primitive descriptors.
+ * @returns {{kind:string, vertices:Array<object>, vertexNormals:Array<object>, uvs:Array<number[]>, faces:Array<number[]>, positions:number[], normals:number[], indices:number[], _gpuResources:Array<object>}} A geometry object suitable for drawing or export.
+ */
+static buildGeometry(builder) {
+    const target = this.#createGeometry3D();
+    const api = {
+        add: (geometry, options = {}) => this.#appendGeometry3D(target, geometry, options),
+        box: (width = 50, height = width, depth = height, detailX = 1, detailY = 1, options = {}) => {
+            this.#appendGeometry3D(target, this.#buildBoxGeometry3D(width, height, depth, detailX, detailY), options);
+            return target;
+        },
+        plane: (width = 50, height = width, detailX = 1, detailY = 1, options = {}) => {
+            this.#appendGeometry3D(target, this.#buildPlaneGeometry3D(width, height, detailX, detailY), options);
+            return target;
+        },
+        sphere: (radius = 50, detailX = 24, detailY = 16, options = {}) => {
+            this.#appendGeometry3D(target, this.#buildSphereGeometry3D(radius, detailX, detailY), options);
+            return target;
+        },
+        ellipsoid: (radiusX = 50, radiusY = radiusX, radiusZ = radiusX, detailX = 24, detailY = 16, options = {}) => {
+            this.#appendGeometry3D(target, this.#buildEllipsoidGeometry3D(radiusX, radiusY, radiusZ, detailX, detailY), options);
+            return target;
+        },
+        cylinder: (radius = 25, height = 50, detailX = 24, detailY = 1, bottomCap = true, topCap = true, options = {}) => {
+            this.#appendGeometry3D(target, this.#buildCylinderGeometry3D(radius, height, detailX, detailY, bottomCap, topCap), options);
+            return target;
+        },
+        cone: (radius = 25, height = 50, detailX = 24, detailY = 1, cap = true, options = {}) => {
+            this.#appendGeometry3D(target, this.#buildConeGeometry3D(radius, height, detailX, detailY, cap), options);
+            return target;
+        },
+        torus: (radius = 50, tubeRadius = 20, detailX = 24, detailY = 16, options = {}) => {
+            this.#appendGeometry3D(target, this.#buildTorusGeometry3D(radius, tubeRadius, detailX, detailY), options);
+            return target;
+        }
+    };
+
+    if (typeof builder === 'function') {
+        builder(api, target);
+        return target;
+    }
+
+    if (Array.isArray(builder)) {
+        for (const descriptor of builder) {
+            if (!descriptor || typeof descriptor !== 'object') continue;
+            const type = String(descriptor.type ?? '').toLowerCase();
+            const args = Array.isArray(descriptor.args) ? descriptor.args : [];
+            const options = descriptor.options ?? {};
+            if (typeof api[type] === 'function') {
+                api[type](...args, options);
+            }
+        }
+    }
+
+    return target;
+}
+
+/**
+ * Clears a geometry object from GPU memory.
+ *
+ * @param {object} geometry Geometry object created by `buildGeometry()` or one of the primitive helpers.
+ * @returns {object|null} The same geometry object after GPU resources have been released.
+ */
+static freeGeometry(geometry) {
+    if (!geometry || typeof geometry !== 'object') {
+        return null;
+    }
+
+    const resources = Array.isArray(geometry._gpuResources) ? geometry._gpuResources : [];
+    for (const entry of resources) {
+        const gl = entry?.gl;
+        if (!gl) continue;
+        try { if (entry.positionBuffer) gl.deleteBuffer(entry.positionBuffer); } catch {}
+        try { if (entry.normalBuffer) gl.deleteBuffer(entry.normalBuffer); } catch {}
+        try { if (entry.uvBuffer) gl.deleteBuffer(entry.uvBuffer); } catch {}
+        try { if (entry.indexBuffer) gl.deleteBuffer(entry.indexBuffer); } catch {}
+    }
+    geometry._gpuResources = [];
+    return geometry;
+}
+
+/**
+ * Draws a cone.
+ *
+ * @param {number} [radius=50] Base radius.
+ * @param {number} [height=50] Cone height.
+ * @param {number} [detailX=24] Number of radial subdivisions.
+ * @param {number} [detailY=1] Number of vertical subdivisions.
+ * @param {boolean} [cap=true] Whether to close the base with a cap.
+ * @param {{geometry?: object, translate?: number[], rotate?: number[], scale?: number[]}} [options={}] Optional geometry capture and transform settings.
+ * @returns {object|void} The generated geometry when captured; otherwise nothing.
+ */
+static cone(radius, height, detailX = 24, detailY = 1, cap = true, options = {}) {
+    if (radius === undefined) radius = 50;
+    if (height === undefined) height = 50;
+     detailX = detailX-1 < 0 ? 0 : detailX-1;
+    // Build geometry then flip Y to point downward (matching reference image)
+    const geometry = this.#buildConeGeometry3D(radius, height, detailX, detailY, cap);
+    for (let i = 0; i < geometry.vertices.length; i++) {
+        geometry.vertices[i].y *= -1;
+        geometry.vertexNormals[i].y *= -1;
+    }
+    for (let i = 0; i < geometry.positions.length; i += 3) {
+        geometry.positions[i + 1] *= -1;
+        geometry.normals[i + 1] *= -1;
+    }
+    return this.#commitOrDrawGeometry3D(geometry, options);
+}
+
+/**
+ * Draws a cylinder.
+ *
+ * @param {number} [radius=50] Cylinder radius.
+ * @param {number} [height=radius] Cylinder height.
+ * @param {number} [detailX=24] Number of radial subdivisions.
+ * @param {number} [detailY=1] Number of height subdivisions.
+ * @param {boolean} [bottomCap=true] Whether to close the bottom.
+ * @param {boolean} [topCap=true] Whether to close the top.
+ * @param {{geometry?: object, translate?: number[], rotate?: number[], scale?: number[]}} [options={}] Optional geometry capture and transform settings.
+ * @returns {object|void} The generated geometry when captured; otherwise nothing.
+ */
+static cylinder(radius, height=radius, detailX = 24, detailY = 1, bottomCap = true, topCap = true, options = {}) {
+    if (radius === undefined) radius = 50;
+    const geometry = this.#buildCylinderGeometry3D(radius, height, detailX, detailY, bottomCap, topCap);
+    return this.#commitOrDrawGeometry3D(geometry, options);
+}
+
+/**
+ * Draws an ellipsoid.
+ *
+ * @param {number} [radiusX=50] X-axis radius.
+ * @param {number} [radiusY=radiusX] Y-axis radius.
+ * @param {number} [radiusZ=radiusX] Z-axis radius.
+ * @param {number} [detailX=24] Number of longitudinal subdivisions.
+ * @param {number} [detailY=16] Number of latitudinal subdivisions.
+ * @param {{geometry?: object, translate?: number[], rotate?: number[], scale?: number[]}} [options={}] Optional geometry capture and transform settings.
+ * @returns {object|void} The generated geometry when captured; otherwise nothing.
+ */
+static ellipsoid(radiusX, radiusY, radiusZ, detailX = 24, detailY = 16, options = {}) {
+    if (radiusX === undefined) radiusX = 50;
+    if (radiusY === undefined) radiusY = radiusX;
+    if (radiusZ === undefined) radiusZ = radiusX;
+    const geometry = this.#buildEllipsoidGeometry3D(radiusX, radiusY, radiusZ, detailX, detailY);
+    return this.#commitOrDrawGeometry3D(geometry, options);
+}
+
+/**
+ * Draws a plane.
+ *
+ * @param {number} [width=200] Plane width.
+ * @param {number} [height=width] Plane height.
+ * @param {number} [detailX=1] Number of horizontal subdivisions.
+ * @param {number} [detailY=1] Number of vertical subdivisions.
+ * @param {{geometry?: object, translate?: number[], rotate?: number[], scale?: number[]}} [options={}] Optional geometry capture and transform settings.
+ * @returns {object|void} The generated geometry when captured; otherwise nothing.
+ */
+static plane(width, height, detailX = 1, detailY = 1, options = {}) {
+    if (width  === undefined) width  = 50;
+    if (height === undefined) height = width;
+    const geometry = this.#buildPlaneGeometry3D(width, height, detailX, detailY);
+    return this.#commitOrDrawGeometry3D(geometry, options);
+}
+
+/**
+ * Draws a sphere.
+ *
+ * @param {number} [radius=50] Sphere radius.
+ * @param {number} [detailX=24] Number of longitudinal subdivisions.
+ * @param {number} [detailY=16] Number of latitudinal subdivisions.
+ * @param {{geometry?: object, translate?: number[], rotate?: number[], scale?: number[]}} [options={}] Optional geometry capture and transform settings.
+ * @returns {object|void} The generated geometry when captured; otherwise nothing.
+ */
+static sphere(radius, detailX = 24, detailY = 16, options = {}) {
+    if (radius === undefined) radius = 50;
+    const geometry = this.#buildSphereGeometry3D(radius, detailX, detailY);
+    return this.#commitOrDrawGeometry3D(geometry, options);
+}
+
+/**
+ * Draws a torus.
+ *
+ * @param {number} [radius=50] Distance from the torus center to the middle of the tube.
+ * @param {number} [tubeRadius=20] Radius of the tube itself.
+ * @param {number} [detailX=24] Number of subdivisions around the main ring.
+ * @param {number} [detailY=16] Number of subdivisions around the tube.
+ * @param {{geometry?: object, translate?: number[], rotate?: number[], scale?: number[]}} [options={}] Optional geometry capture and transform settings.
+ * @returns {object|void} The generated geometry when captured; otherwise nothing.
+ */
+static torus(radius, tubeRadius, detailX = 24, detailY = 16, options = {}) {
+    if (radius     === undefined) radius     = 50;
+    if (tubeRadius === undefined) tubeRadius = 10;
+    const geometry = this.#buildTorusGeometry3D(radius, tubeRadius, detailX, detailY);
+    // Rotate 90° around X so the ring edge faces the camera (Z-axis)
+    // instead of the hole opening. Matches p5.js WEBGL torus orientation.
+    for (let i = 0; i < geometry.vertices.length; i++) {
+        const v = geometry.vertices[i];
+        const n = geometry.vertexNormals[i];
+        // X stays, Y → -Z, Z → Y  (rotate +90° around X)
+        const vy = v.y, vz = v.z;
+        geometry.vertices[i] = { x: v.x, y: -vz, z: vy };
+        const ny = n.y, nz = n.z;
+        geometry.vertexNormals[i] = { x: n.x, y: -nz, z: ny };
+    }
+    for (let i = 0; i < geometry.positions.length; i += 3) {
+        const py = geometry.positions[i + 1];
+        const pz = geometry.positions[i + 2];
+        geometry.positions[i + 1] = -pz;
+        geometry.positions[i + 2] =  py;
+        const ny = geometry.normals[i + 1];
+        const nz = geometry.normals[i + 2];
+        geometry.normals[i + 1] = -nz;
+        geometry.normals[i + 2] =  ny;
+    }
+    return this.#commitOrDrawGeometry3D(geometry, options);
+}
+
+/** @private */
+static #createGeometry3D() {
+    return {
+        kind: 'canvex-geometry',
+        vertices: [],
+        vertexNormals: [],
+        uvs: [],
+        faces: [],
+        positions: [],
+        normals: [],
+        indices: [],
+        _gpuResources: [],
+        _allEdges: false
+    };
+}
+
+/** @private */
+static #commitOrDrawGeometry3D(geometry, options = {}) {
+    if (options && typeof options === 'object' && options.geometry) {
+        this.#appendGeometry3D(options.geometry, geometry, options);
+        return options.geometry;
+    }
+
+    const ctx = this.#ctx();
+    if (!this.#isWebGL(ctx)) {
+        throw new Error('3D primitives require an active WebGL or WebGL2 rendering context.');
+    }
+    this.#drawGeometry3D(ctx, geometry);
+    return undefined;
+}
+
+/** @private */
+static #appendGeometry3D(target, source, options = {}) {
+    if (!target || typeof target !== 'object') {
+        throw new TypeError('Target geometry must be an object created by buildGeometry().');
+    }
+    const transform = this.#normalizeTransform3D(options);
+    const baseIndex = target.vertices.length;
+
+    // Propagate _allEdges: if ANY merged piece is a closed mesh (sphere,
+    // cylinder, torus, etc.) the combined geometry must also draw all edges.
+    if (source._allEdges) target._allEdges = true;
+
+    for (let i = 0; i < source.vertices.length; i += 1) {
+        const vertex = source.vertices[i];
+        const normal = source.vertexNormals[i] ?? { x: 0, y: 0, z: 1 };
+        const uv = source.uvs[i] ?? [0, 0];
+        const position = this.#transformPosition3D(vertex, transform);
+        const transformedNormal = this.#transformNormal3D(normal, transform);
+        target.vertices.push(position);
+        target.vertexNormals.push(transformedNormal);
+        target.uvs.push([uv[0], uv[1]]);
+        target.positions.push(position.x, position.y, position.z);
+        target.normals.push(transformedNormal.x, transformedNormal.y, transformedNormal.z);
+    }
+
+    for (const face of source.faces) {
+        const nextFace = [face[0] + baseIndex, face[1] + baseIndex, face[2] + baseIndex];
+        target.faces.push(nextFace);
+        target.indices.push(nextFace[0], nextFace[1], nextFace[2]);
+    }
+
+    return target;
+}
+
+/** @private */
+static #normalizeTransform3D(options = {}) {
+    const translate = Array.isArray(options.translate)
+        ? options.translate
+        : [options.x ?? 0, options.y ?? 0, options.z ?? 0];
+    const rotate = Array.isArray(options.rotate)
+        ? options.rotate
+        : [options.rotateX ?? 0, options.rotateY ?? 0, options.rotateZ ?? 0];
+    let scale = options.scale ?? [1, 1, 1];
+    if (typeof scale === 'number') scale = [scale, scale, scale];
+    if (!Array.isArray(scale)) scale = [1, 1, 1];
+    return {
+        translate: [Number(translate[0] ?? 0), Number(translate[1] ?? 0), Number(translate[2] ?? 0)],
+        rotate: [Number(rotate[0] ?? 0), Number(rotate[1] ?? 0), Number(rotate[2] ?? 0)],
+        scale: [Number(scale[0] ?? 1), Number(scale[1] ?? 1), Number(scale[2] ?? 1)]
+    };
+}
+
+/** @private */
+static #transformPosition3D(vertex, transform) {
+    let x = Number(vertex.x ?? 0) * transform.scale[0];
+    let y = Number(vertex.y ?? 0) * transform.scale[1];
+    let z = Number(vertex.z ?? 0) * transform.scale[2];
+
+    [x, y, z] = this.#rotateXYZ3D(x, y, z, transform.rotate);
+
+    return {
+        x: x + transform.translate[0],
+        y: y + transform.translate[1],
+        z: z + transform.translate[2]
+    };
+}
+
+/** @private */
+static #transformNormal3D(normal, transform) {
+    let x = Number(normal.x ?? 0);
+    let y = Number(normal.y ?? 0);
+    let z = Number(normal.z ?? 1);
+    [x, y, z] = this.#rotateXYZ3D(x, y, z, transform.rotate);
+    const length = Math.hypot(x, y, z) || 1;
+    return { x: x / length, y: y / length, z: z / length };
+}
+
+/** @private */
+static #rotateXYZ3D(x, y, z, rotate) {
+    const [rx, ry, rz] = rotate;
+
+    let cy = Math.cos(rx);
+    let sy = Math.sin(rx);
+    let ny = y * cy - z * sy;
+    let nz = y * sy + z * cy;
+    y = ny;
+    z = nz;
+
+    let cx = Math.cos(ry);
+    let sx = Math.sin(ry);
+    let nx = x * cx + z * sx;
+    nz = -x * sx + z * cx;
+    x = nx;
+    z = nz;
+
+    let cz = Math.cos(rz);
+    let sz = Math.sin(rz);
+    nx = x * cz - y * sz;
+    ny = x * sz + y * cz;
+    x = nx;
+    y = ny;
+
+    return [x, y, z];
+}
+
+/**
+ * Ensures that a 3D camera is active before drawing geometry. If no camera
+ * matrices have been uploaded yet (u_useMatrices is still 0 / unset), this
+ * method pushes Camera's current projection and view matrices into the active
+ * shader so the user doesn't have to configure anything for a basic 3D sketch.
+ *
+ * The default Camera state (eye at z=800, looking at origin, perspective fov
+ * matching p5.js) places the camera far enough that a 100-unit shape fills the
+ * view noticeably. If the user has already called Interaction.orbitControl()
+ * or manually uploaded matrices this frame, this is a no-op.
+ *
+ * @param {WebGLRenderingContext | WebGL2RenderingContext} gl
+ * @param {WebGLProgram} program  The currently bound shader program.
+ * @private
+ */
+static #ensureDefaultCamera3D(gl, program) {
+    // Check whether 3D matrices are already active this frame.
+    const uUse = gl.getUniformLocation(program, 'u_useMatrices');
+    if (uUse) {
+        // getUniform returns the current value — if it's already 1, bail out.
+        const alreadyEnabled = gl.getUniform(program, uUse);
+        if (alreadyEnabled) return;
+    }
+
+    // Only reposition the camera if it is still at the library factory default.
+    // The factory default is eye=(0,0,800), center=(0,0,0), up=(0,1,0).
+    // We check all three axes so a user-placed camera is always preserved.
+    const preSnap = Camera.snapshot();
+    const isFactoryDefault =
+        preSnap.eyeX === 0 && preSnap.eyeY === 0 && preSnap.eyeZ === 800 &&
+        preSnap.centerX === 0 && preSnap.centerY === 0 && preSnap.centerZ === 0;
+    if (isFactoryDefault) {
+        // Use p5.js default: cameraZ = height / 2 / tan(PI*30/180)
+        // FOV = 2 * atan(height/2 / cameraZ) = PI/3 (60°) — same as p5.js WEBGL mode.
+        // This keeps shapes the same apparent size regardless of canvas pixel count.
+        const canvas = (typeof Canvex !== 'undefined' && Canvex?.canvas) ? Canvex.canvas : null;
+        const aspect = canvas ? canvas.width / canvas.height : 1;
+        const canvasHeight = canvas ? canvas.height : 400;
+        const cameraZ = (canvasHeight / 2) / Math.tan(Math.PI / 6); // tan(30°) — matches orbitControl default
+        const fovy = 2 * Math.atan((canvasHeight / 2) / cameraZ);
+        Camera.perspective(fovy, aspect, 0.1, 10000);
+        Camera.camera(0, 0, cameraZ, 0, 0, 0, 0, 1, 0);
+    }
+
+    // Take snapshot after any repositioning so we upload the correct matrices.
+    const snap = Camera.snapshot();
+
+    const uProj = gl.getUniformLocation(program, 'u_projection');
+    if (uProj) {
+        gl.uniformMatrix4fv(uProj, false, new Float32Array(snap.projectionMatrix));
+    }
+
+    const uMV = gl.getUniformLocation(program, 'u_modelView');
+    if (uMV) {
+        gl.uniformMatrix4fv(uMV, false, new Float32Array(snap.viewMatrix));
+    }
+
+    if (uUse) {
+        gl.uniform1i(uUse, 1);
+    }
+}
+
+/** @private */
+static #drawGeometry3D(gl, geometry) {
+    const program = gl.getParameter(gl.CURRENT_PROGRAM);
+    if (!program) {
+        throw new Error('WebGL drawing requires an active shader program. Call gl.useProgram(program) before 3D Shapes methods.');
+    }
+
+    // Apply the default front-facing camera if the user hasn't set one up.
+    this.#ensureDefaultCamera3D(gl, program);
+
+    // Upload the current Transform model matrix so that translate/rotate/scale
+    // calls affect 3D shapes exactly as they do in p5.js WEBGL mode.
+    try {
+        if (typeof Transform !== 'undefined') {
+            const uModel = gl.getUniformLocation(program, 'u_model');
+            if (uModel) {
+                gl.uniformMatrix4fv(uModel, false, Transform.matrix4());
+            }
+            // Also support the common alias 'u_matrix' used by simpler shaders.
+            const uMatrix = gl.getUniformLocation(program, 'u_matrix');
+            if (uMatrix) {
+                gl.uniformMatrix4fv(uMatrix, false, Transform.matrix4());
+            }
+        }
+    } catch { /* shader doesn't expose a model uniform – fine, skip */ }
+
+    const positionLocation = gl.getAttribLocation(program, 'a_position');
+    if (positionLocation < 0) {
+        throw new Error('The active shader program must define an a_position attribute for 3D geometry.');
+    }
+
+    const getOrCreateBuffer = (entry, key, target, data, TypedArray) => {
+        if (!entry[key]) entry[key] = gl.createBuffer();
+        gl.bindBuffer(target, entry[key]);
+        gl.bufferData(target, new TypedArray(data), gl.STATIC_DRAW);
+        return entry[key];
+    };
+
+    let resource = Array.isArray(geometry._gpuResources)
+        ? geometry._gpuResources.find((entry) => entry.gl === gl)
+        : null;
+    if (!resource) {
+        resource = { gl };
+        geometry._gpuResources = Array.isArray(geometry._gpuResources) ? geometry._gpuResources : [];
+        geometry._gpuResources.push(resource);
+    }
+
+    getOrCreateBuffer(resource, 'positionBuffer', gl.ARRAY_BUFFER, geometry.positions, Float32Array);
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
+
+    const normalLocation = gl.getAttribLocation(program, 'a_normal');
+    if (normalLocation >= 0 && Array.isArray(geometry.normals) && geometry.normals.length > 0) {
+        getOrCreateBuffer(resource, 'normalBuffer', gl.ARRAY_BUFFER, geometry.normals, Float32Array);
+        gl.enableVertexAttribArray(normalLocation);
+        gl.vertexAttribPointer(normalLocation, 3, gl.FLOAT, false, 0, 0);
+    }
+
+    const uvLocation = gl.getAttribLocation(program, 'a_texcoord');
+    if (uvLocation >= 0 && Array.isArray(geometry.uvs) && geometry.uvs.length > 0) {
+        const flatUvs = geometry.uvs.flat();
+        getOrCreateBuffer(resource, 'uvBuffer', gl.ARRAY_BUFFER, flatUvs, Float32Array);
+        gl.enableVertexAttribArray(uvLocation);
+        gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, 0, 0);
+    }
+
+    // Apply fill color from Canvas state so WebGL shapes respect fill() / noFill().
+    const uColor = gl.getUniformLocation(program, 'u_color');
+    let prevColor = null;
+    if (uColor) {
+        prevColor = gl.getUniform(program, uColor);
+        try {
+            const canvas = (typeof Canvex !== 'undefined' && Canvex?.canvas) ? Canvex.canvas : null;
+            const fillGL = canvas?.__canvexFillColorGL ?? (typeof Canvas !== 'undefined' ? Canvas._fillColorGL : null);
+            if (Array.isArray(fillGL) && fillGL.length >= 4) {
+                gl.uniform4fv(uColor, new Float32Array(fillGL));
+            }
+        } catch { /* leave current uniform as-is */ }
+    }
+
+    // Enable polygon offset on the fill pass so that edge lines always render
+    // cleanly on top without z-fighting (smoother, crisper strokes).
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1.0, 1.0);
+
+    if (Array.isArray(geometry.indices) && geometry.indices.length > 0) {
+        getOrCreateBuffer(resource, 'indexBuffer', gl.ELEMENT_ARRAY_BUFFER, geometry.indices, Uint16Array);
+        gl.drawElements(gl.TRIANGLES, geometry.indices.length, gl.UNSIGNED_SHORT, 0);
+    } else {
+        gl.drawArrays(gl.TRIANGLES, 0, geometry.positions.length / 3);
+    }
+
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(0, 0);
+
+    // Restore fill color before edge pass.
+    if (uColor && prevColor) {
+        gl.uniform4fv(uColor, new Float32Array(prevColor));
+    }
+
+    // Draw stroke edges on top of the filled geometry.
+    // Edges are always drawn for all 3D shapes to provide depth cues and clarity.
+    this.#drawGeometry3DEdges(gl, program, geometry, resource, getOrCreateBuffer);
+}
+
+/** @private */
+static #drawGeometry3DEdges(gl, program, geometry, resource, getOrCreateBuffer) {
+    // Derive a boundary-only edge list from the face index pairs.
+    // An edge shared by exactly two faces is an internal diagonal and must be
+    // excluded — only edges belonging to a single face (the outline) are drawn.
+    if (!Array.isArray(geometry.faces) || geometry.faces.length === 0) return;
+
+    // Resolve stroke color from Canvas state.
+    // Fall back to opaque black when Canvas is not available.
+    let strokeGL = [0, 0, 0, 1];
+    let noStroke = false;
+    try {
+        if (typeof Canvas !== 'undefined') {
+            const canvas = (typeof Canvex !== 'undefined' && Canvex?.canvas) ? Canvex.canvas : null;
+            const canvasGLColor = canvas?.__canvexStrokeColorGL ?? Canvas._strokeColorGL ?? null;
+            if (Array.isArray(canvasGLColor) && canvasGLColor.length >= 4) {
+                const [r, g, b, a] = canvasGLColor;
+                if (a === 0) {
+                    // noStroke() was called: skip edge drawing entirely, matching p5.js behaviour.
+                    noStroke = true;
+                } else {
+                    strokeGL = [r, g, b, a];
+                }
+            }
+        }
+    } catch { /* keep default black */ }
+
+    // Honour noStroke() — do not draw any edges.
+    if (noStroke) return;
+
+    if (!resource._edgeIndices) {
+        const edgeCount = new Map();
+        const edgePairs = new Map();
+        for (const face of geometry.faces) {
+            const len = face.length;
+            for (let i = 0; i < len; i++) {
+                const a = face[i];
+                const b = face[(i + 1) % len];
+                const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+                edgeCount.set(key, (edgeCount.get(key) ?? 0) + 1);
+                if (!edgePairs.has(key)) edgePairs.set(key, [a, b]);
+            }
+        }
+        // For closed meshes (_allEdges), draw every unique edge so the wireframe
+        // grid is fully visible. For open surfaces (e.g. box), draw only boundary
+        // edges (those belonging to exactly one face) to show silhouette outlines.
+        const edgeIndices = [];
+        if (geometry._allEdges) {
+            for (const [a, b] of edgePairs.values()) {
+                edgeIndices.push(a, b);
+            }
+        } else {
+            for (const [key, count] of edgeCount) {
+                if (count === 1) {
+                    const [a, b] = edgePairs.get(key);
+                    edgeIndices.push(a, b);
+                }
+            }
+        }
+        resource._edgeIndices = edgeIndices;
+        resource._edgeCount = edgeIndices.length;
+    }
+
+    if (resource._edgeCount === 0) return;
+
+    // Upload edge index buffer.
+    if (!resource._edgeIndexBuffer) resource._edgeIndexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, resource._edgeIndexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(resource._edgeIndices), gl.STATIC_DRAW);
+
+    // Re-bind the position buffer for the line pass.
+    gl.bindBuffer(gl.ARRAY_BUFFER, resource.positionBuffer);
+    const positionLocation = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
+
+    // Use the exact stroke color — no darkening multiplier — matching p5.js behaviour
+    // where stroke() directly controls the edge colour of 3D shapes.
+    const edgeColor = new Float32Array(strokeGL);
+
+    // Set stroke color via u_color uniform if the shader exposes it.
+    const uColor = gl.getUniformLocation(program, 'u_color');
+    let prevColor = null;
+    if (uColor) {
+        prevColor = gl.getUniform(program, uColor);
+        gl.uniform4fv(uColor, edgeColor);
+    }
+
+    gl.drawElements(gl.LINES, resource._edgeCount, gl.UNSIGNED_SHORT, 0);
+
+    // Restore previous color.
+    if (uColor && prevColor) {
+        gl.uniform4fv(uColor, new Float32Array(prevColor));
+    }
+}
+
+/** @private */
+static #buildPlaneGeometry3D(width = 50, height = width, detailX = 1, detailY = 1) {
+    width = Number(width);
+    height = Number(height);
+    detailX = Math.max(1, Math.floor(Number(detailX) || 1));
+    detailY = Math.max(1, Math.floor(Number(detailY) || 1));
+    const geometry = this.#createGeometry3D();
+    geometry._allEdges = true;
+    const halfW = width / 2;
+    const halfH = height / 2;
+
+    for (let iy = 0; iy <= detailY; iy += 1) {
+        const v = iy / detailY;
+        const y = halfH - v * height;
+        for (let ix = 0; ix <= detailX; ix += 1) {
+            const u = ix / detailX;
+            const x = -halfW + u * width;
+            geometry.vertices.push({ x, y, z: 0 });
+            geometry.vertexNormals.push({ x: 0, y: 0, z: 1 });
+            geometry.uvs.push([u, v]);
+            geometry.positions.push(x, y, 0);
+            geometry.normals.push(0, 0, 1);
+        }
+    }
+
+    const row = detailX + 1;
+    for (let iy = 0; iy < detailY; iy += 1) {
+        for (let ix = 0; ix < detailX; ix += 1) {
+            const a = iy * row + ix;
+            const b = a + 1;
+            const c = a + row;
+            const d = c + 1;
+            geometry.faces.push([a, c, b], [b, c, d]);
+            geometry.indices.push(a, c, b, b, c, d);
+        }
+    }
+    return geometry;
+}
+
+/** @private */
+static #appendFaceGrid3D(target, origin, uAxis, vAxis, uSegments, vSegments, normal, flip = false) {
+    const local = this.#createGeometry3D();
+    const uCount = Math.max(1, Math.floor(uSegments));
+    const vCount = Math.max(1, Math.floor(vSegments));
+    for (let iy = 0; iy <= vCount; iy += 1) {
+        const v = iy / vCount;
+        for (let ix = 0; ix <= uCount; ix += 1) {
+            const u = ix / uCount;
+            const x = origin[0] + uAxis[0] * u + vAxis[0] * v;
+            const y = origin[1] + uAxis[1] * u + vAxis[1] * v;
+            const z = origin[2] + uAxis[2] * u + vAxis[2] * v;
+            local.vertices.push({ x, y, z });
+            local.vertexNormals.push({ x: normal[0], y: normal[1], z: normal[2] });
+            local.uvs.push([u, v]);
+            local.positions.push(x, y, z);
+            local.normals.push(normal[0], normal[1], normal[2]);
+        }
+    }
+    const row = uCount + 1;
+    for (let iy = 0; iy < vCount; iy += 1) {
+        for (let ix = 0; ix < uCount; ix += 1) {
+            const a = iy * row + ix;
+            const b = a + 1;
+            const c = a + row;
+            const d = c + 1;
+            if (flip) {
+                local.faces.push([a, b, c], [b, d, c]);
+                local.indices.push(a, b, c, b, d, c);
+            } else {
+                local.faces.push([a, c, b], [b, c, d]);
+                local.indices.push(a, c, b, b, c, d);
+            }
+        }
+    }
+    this.#appendGeometry3D(target, local, {});
+}
+
+/** @private */
+static #buildBoxGeometry3D(width = 50, height = width, depth = height, detailX = 1, detailY = 1) {
+    const geometry = this.#createGeometry3D();
+
+    const hw = width / 2;
+    const hh = height / 2;
+    const hd = depth / 2;
+
+    detailX = Math.max(1, Math.floor(detailX));
+    detailY = Math.max(1, Math.floor(detailY));
+    // Front (+Z)
+    this.#appendFaceGrid3D(
+        geometry,
+        [-hw,  hh,  hd],
+        [ width, 0, 0],
+        [ 0, -height, 0],
+        detailX, detailY,
+        [0, 0, 1]
+    );
+
+    // Back (-Z)
+    this.#appendFaceGrid3D(
+        geometry,
+        [ hw,  hh, -hd],
+        [-width, 0, 0],
+        [ 0, -height, 0],
+        detailX, detailY,
+        [0, 0, -1]
+    );
+
+    // Left (-X)
+    this.#appendFaceGrid3D(
+        geometry,
+        [-hw,  hh, -hd],
+        [0, 0, depth],
+        [0, -height, 0],
+        detailX, detailY,
+        [-1, 0, 0]
+    );
+
+    // Right (+X)
+    this.#appendFaceGrid3D(
+        geometry,
+        [ hw,  hh,  hd],
+        [0, 0, -depth],
+        [0, -height, 0],
+        detailX, detailY,
+        [1, 0, 0]
+    );
+
+    // Top (+Y)
+    this.#appendFaceGrid3D(
+        geometry,
+        [-hw,  hh, -hd],
+        [ width, 0, 0],
+        [0, 0, depth],
+        detailX, detailY,
+        [0, 1, 0]
+    );
+
+    // Bottom (-Y)
+    this.#appendFaceGrid3D(
+        geometry,
+        [-hw, -hh,  hd],
+        [ width, 0, 0],
+        [0, 0, -depth],
+        detailX, detailY,
+        [0, -1, 0]
+    );
+
+    return geometry;
+}
+
+/** @private */
+static #buildEllipsoidGeometry3D(radiusX = 50, radiusY = radiusX, radiusZ = radiusX, detailX = 24, detailY = 16) {
+    radiusX = Number(radiusX);
+    radiusY = Number(radiusY);
+    radiusZ = Number(radiusZ);
+    detailX = Math.max(3, Math.floor(Number(detailX) || 24));
+    detailY = Math.max(2, Math.floor(Number(detailY) || 16));
+    const geometry = this.#createGeometry3D();
+    geometry._allEdges = true;
+
+    for (let iy = 0; iy <= detailY; iy += 1) {
+        const v = iy / detailY;
+        const theta = v * Math.PI;
+        const sinTheta = Math.sin(theta);
+        const cosTheta = Math.cos(theta);
+        for (let ix = 0; ix <= detailX; ix += 1) {
+            const u = ix / detailX;
+            const phi = u * Math.PI * 2;
+            const sinPhi = Math.sin(phi);
+            const cosPhi = Math.cos(phi);
+            const x = radiusX * sinTheta * cosPhi;
+            const y = radiusY * cosTheta;
+            const z = radiusZ * sinTheta * sinPhi;
+            const nx = x / (radiusX || 1);
+            const ny = y / (radiusY || 1);
+            const nz = z / (radiusZ || 1);
+            const nl = Math.hypot(nx, ny, nz) || 1;
+            geometry.vertices.push({ x, y, z });
+            geometry.vertexNormals.push({ x: nx / nl, y: ny / nl, z: nz / nl });
+            geometry.uvs.push([u, v]);
+            geometry.positions.push(x, y, z);
+            geometry.normals.push(nx / nl, ny / nl, nz / nl);
+        }
+    }
+
+    const row = detailX + 1;
+    for (let iy = 0; iy < detailY; iy += 1) {
+        for (let ix = 0; ix < detailX; ix += 1) {
+            const a = iy * row + ix;
+            const b = a + 1;
+            const c = a + row;
+            const d = c + 1;
+            geometry.faces.push([a, c, b], [b, c, d]);
+            geometry.indices.push(a, c, b, b, c, d);
+        }
+    }
+    return geometry;
+}
+
+/** @private */
+static #buildSphereGeometry3D(radius = 50, detailX = 24, detailY = 16) {
+    return this.#buildEllipsoidGeometry3D(radius, radius, radius, detailX, detailY);
+}
+
+/** @private */
+static #buildCylinderGeometry3D(radius = 25, height = 50, detailX = 24, detailY = 1, bottomCap = true, topCap = true) {
+    radius = Number(radius);
+    height = Number(height);
+    detailX = Math.max(3, Math.floor(Number(detailX) || 24));
+    detailY = Math.max(1, Math.floor(Number(detailY) || 1));
+    const geometry = this.#createGeometry3D();
+    geometry._allEdges = true;
+    const halfH = height / 2;
+
+    for (let iy = 0; iy <= detailY; iy += 1) {
+        const v = iy / detailY;
+        const y = halfH - v * height;
+        for (let ix = 0; ix <= detailX; ix += 1) {
+            const u = ix / detailX;
+            const angle = u * Math.PI * 2;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const x = cos * radius;
+            const z = sin * radius;
+            geometry.vertices.push({ x, y, z });
+            geometry.vertexNormals.push({ x: cos, y: 0, z: sin });
+            geometry.uvs.push([u, v]);
+            geometry.positions.push(x, y, z);
+            geometry.normals.push(cos, 0, sin);
+        }
+    }
+
+    const row = detailX + 1;
+    for (let iy = 0; iy < detailY; iy += 1) {
+        for (let ix = 0; ix < detailX; ix += 1) {
+            const a = iy * row + ix;
+            const b = a + 1;
+            const c = a + row;
+            const d = c + 1;
+            geometry.faces.push([a, c, b], [b, c, d]);
+            geometry.indices.push(a, c, b, b, c, d);
+        }
+    }
+
+    const appendCap = (isTop) => {
+        const centerIndex = geometry.vertices.length;
+        const y = isTop ? halfH : -halfH;
+        const ny = isTop ? 1 : -1;
+        geometry.vertices.push({ x: 0, y, z: 0 });
+        geometry.vertexNormals.push({ x: 0, y: ny, z: 0 });
+        geometry.uvs.push([0.5, 0.5]);
+        geometry.positions.push(0, y, 0);
+        geometry.normals.push(0, ny, 0);
+        for (let ix = 0; ix <= detailX; ix += 1) {
+            const u = ix / detailX;
+            const angle = u * Math.PI * 2;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const x = cos * radius;
+            const z = sin * radius;
+            geometry.vertices.push({ x, y, z });
+            geometry.vertexNormals.push({ x: 0, y: ny, z: 0 });
+            geometry.uvs.push([(cos + 1) / 2, (sin + 1) / 2]);
+            geometry.positions.push(x, y, z);
+            geometry.normals.push(0, ny, 0);
+        }
+        for (let ix = 0; ix < detailX; ix += 1) {
+            const a = centerIndex;
+            const b = centerIndex + ix + 1;
+            const c = centerIndex + ix + 2;
+            if (isTop) {
+                geometry.faces.push([a, b, c]);
+                geometry.indices.push(a, b, c);
+            } else {
+                geometry.faces.push([a, c, b]);
+                geometry.indices.push(a, c, b);
+            }
+        }
+    };
+
+    if (topCap) appendCap(true);
+    if (bottomCap) appendCap(false);
+    return geometry;
+}
+
+/** @private */
+static #buildConeGeometry3D(radius = 25, height = 50, detailX = 24, detailY = 1, cap = true) {
+    radius = Number(radius);
+    height = Number(height);
+    detailX = Math.max(3, Math.floor(Number(detailX) || 24));
+    detailY = Math.max(1, Math.floor(Number(detailY) || 1));
+    const geometry = this.#createGeometry3D();
+    geometry._allEdges = true;
+    const halfH = height / 2;
+
+    for (let iy = 0; iy <= detailY; iy += 1) {
+        const v = iy / detailY;
+        const y = halfH - v * height;
+        const ringRadius = radius * (1 - v);
+        for (let ix = 0; ix <= detailX; ix += 1) {
+            const u = ix / detailX;
+            const angle = u * Math.PI * 2;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const x = cos * ringRadius;
+            const z = sin * ringRadius;
+            const ny = radius / (Math.hypot(radius, height) || 1);
+            const normal = { x: cos, y: ny, z: sin };
+            const nl = Math.hypot(normal.x, normal.y, normal.z) || 1;
+            geometry.vertices.push({ x, y, z });
+            geometry.vertexNormals.push({ x: normal.x / nl, y: normal.y / nl, z: normal.z / nl });
+            geometry.uvs.push([u, v]);
+            geometry.positions.push(x, y, z);
+            geometry.normals.push(normal.x / nl, normal.y / nl, normal.z / nl);
+        }
+    }
+
+    const row = detailX + 1;
+    for (let iy = 0; iy < detailY; iy += 1) {
+        for (let ix = 0; ix < detailX; ix += 1) {
+            const a = iy * row + ix;
+            const b = a + 1;
+            const c = a + row;
+            const d = c + 1;
+            geometry.faces.push([a, c, b], [b, c, d]);
+            geometry.indices.push(a, c, b, b, c, d);
+        }
+    }
+
+    if (cap) {
+        const centerIndex = geometry.vertices.length;
+        geometry.vertices.push({ x: 0, y: halfH, z: 0 });
+        geometry.vertexNormals.push({ x: 0, y: 1, z: 0 });
+        geometry.uvs.push([0.5, 0.5]);
+        geometry.positions.push(0, halfH, 0);
+        geometry.normals.push(0, 1, 0);
+        for (let ix = 0; ix <= detailX; ix += 1) {
+            const u = ix / detailX;
+            const angle = u * Math.PI * 2;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            geometry.vertices.push({ x: cos * radius, y: halfH, z: sin * radius });
+            geometry.vertexNormals.push({ x: 0, y: 1, z: 0 });
+            geometry.uvs.push([(cos + 1) / 2, (sin + 1) / 2]);
+            geometry.positions.push(cos * radius, halfH, sin * radius);
+            geometry.normals.push(0, 1, 0);
+        }
+        for (let ix = 0; ix < detailX; ix += 1) {
+            const a = centerIndex;
+            const b = centerIndex + ix + 2;
+            const c = centerIndex + ix + 1;
+            geometry.faces.push([a, b, c]);
+            geometry.indices.push(a, b, c);
+        }
+    }
+
+    return geometry;
+}
+
+/** @private */
+static #buildTorusGeometry3D(radius = 50, tubeRadius = 10, detailX = 24, detailY = 16) {
+    radius = Number(radius);
+    tubeRadius = Number(tubeRadius);
+    detailX = Math.max(3, Math.floor(Number(detailX) || 24));
+    detailY = Math.max(3, Math.floor(Number(detailY) || 16));
+    const geometry = this.#createGeometry3D();
+    geometry._allEdges = true;
+
+    // p5.js torus: main ring sweeps in the XZ plane (hole faces up along Y).
+    // theta = angle around the main ring (XZ plane).
+    // phi   = angle around the tube cross-section.
+    for (let iy = 0; iy <= detailY; iy += 1) {
+        const v = iy / detailY;
+        const phi = v * Math.PI * 2;
+        const cosPhi = Math.cos(phi);
+        const sinPhi = Math.sin(phi);
+        for (let ix = 0; ix <= detailX; ix += 1) {
+            const u = ix / detailX;
+            const theta = u * Math.PI * 2;
+            const cosTheta = Math.cos(theta);
+            const sinTheta = Math.sin(theta);
+            // Ring in XZ plane: main radius + tube offset along radius direction.
+            const ring = radius + tubeRadius * cosPhi;
+            const x = ring * cosTheta;
+            const z = ring * sinTheta;
+            const y = tubeRadius * sinPhi;
+            // Normal: outward from tube surface.
+            const nx = cosTheta * cosPhi;
+            const nz = sinTheta * cosPhi;
+            const ny = sinPhi;
+            geometry.vertices.push({ x, y, z });
+            geometry.vertexNormals.push({ x: nx, y: ny, z: nz });
+            geometry.uvs.push([u, v]);
+            geometry.positions.push(x, y, z);
+            geometry.normals.push(nx, ny, nz);
+        }
+    }
+
+    const row = detailX + 1;
+    for (let iy = 0; iy < detailY; iy += 1) {
+        for (let ix = 0; ix < detailX; ix += 1) {
+            const a = iy * row + ix;
+            const b = a + 1;
+            const c = a + row;
+            const d = c + 1;
+            geometry.faces.push([a, c, b], [b, c, d]);
+            geometry.indices.push(a, c, b, b, c, d);
+        }
+    }
+    return geometry;
+}
 }

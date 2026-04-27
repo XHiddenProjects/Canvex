@@ -16,7 +16,7 @@ export const Camera = class {
 
   static #projection = {
     type: "perspective",
-    fovy: Math.PI / 3,
+    fovy: 2 * Math.atan(200 / 800), // p5.js default: 2 * atan(height/2 / cameraZ) for a 400px canvas at z=800
     aspect: 1,
     near: 0.1,
     far: 10000,
@@ -311,7 +311,11 @@ export const Camera = class {
     const p = this.#projection;
 
     if (p.type === "perspective") {
-      this.#projectionMatrix = this.#perspectiveMatrix(p.fovy, p.aspect, p.near, p.far);
+      // Always use the live canvas aspect ratio so the projection stays correct
+      // even when the canvas is resized or the aspect was not yet known at the
+      // time Camera.perspective() was first called (e.g. at module-load time).
+      const aspect = p._useLiveAspect ? this.#defaultAspect() : p.aspect;
+      this.#projectionMatrix = this.#perspectiveMatrix(p.fovy, aspect, p.near, p.far);
       return this.#projectionMatrix;
     }
 
@@ -399,9 +403,15 @@ export const Camera = class {
   /**
    * Sets a perspective projection for the camera.
    */
-  static perspective(fovy = Math.PI / 3, aspect = this.#defaultAspect(), near = 0.1, far = 10000) {
-    this.#assertFinite("Perspective values", [fovy, aspect, near, far]);
-    if (aspect === 0) throw new RangeError("aspect must not be 0");
+  static perspective(fovy = 2 * Math.atan(200 / 800), aspect = null, near = 0.1, far = 10000) {
+    // When aspect is omitted (null), flag the projection to always re-read the
+    // live canvas aspect ratio each frame so shapes never look squashed even if
+    // the canvas didn't exist yet when this method was first called.
+    const useLiveAspect = aspect === null || aspect === undefined;
+    const resolvedAspect = useLiveAspect ? this.#defaultAspect() : Number(aspect);
+
+    this.#assertFinite("Perspective values", [fovy, resolvedAspect, near, far]);
+    if (resolvedAspect === 0) throw new RangeError("aspect must not be 0");
     if (near <= 0 || far <= 0 || near === far) {
       throw new RangeError("near and far must be positive and different");
     }
@@ -409,7 +419,8 @@ export const Camera = class {
     this.#projection = {
       type: "perspective",
       fovy: Number(fovy),
-      aspect: Number(aspect),
+      aspect: resolvedAspect,
+      _useLiveAspect: useLiveAspect,
       near: Number(near),
       far: Number(far),
       left: this.#projection.left,
