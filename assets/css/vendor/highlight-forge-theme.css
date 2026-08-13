@@ -1,0 +1,73 @@
+/*
+ * highlight.js theme for the Block Script Editor's "Generated Code" tab.
+ * Hand-written (not one of highlight.js's bundled styles/*.css) so the
+ * token colors sit on top of the editor's own dark palette (--bg/--panel/
+ * --text/--accent from assets/css/editor.css) instead of clashing with it.
+ */
+#blkPreview.hljs {
+  display: block;
+  background: transparent;
+  color: var(--text, #d7d9dd);
+}
+
+#blkPreview .hljs-comment,
+#blkPreview .hljs-quote {
+  color: #767c88;
+  font-style: italic;
+}
+
+#blkPreview .hljs-keyword,
+#blkPreview .hljs-selector-tag,
+#blkPreview .hljs-literal,
+#blkPreview .hljs-subst {
+  color: #7aa2f7;
+}
+
+#blkPreview .hljs-string,
+#blkPreview .hljs-regexp,
+#blkPreview .hljs-addition {
+  color: #9ece6a;
+}
+
+#blkPreview .hljs-number {
+  color: #ff9e64;
+}
+
+#blkPreview .hljs-title,
+#blkPreview .hljs-title.function_,
+#blkPreview .hljs-section {
+  color: #e0af68;
+}
+
+#blkPreview .hljs-variable,
+#blkPreview .hljs-attr,
+#blkPreview .hljs-attribute,
+#blkPreview .hljs-property {
+  color: #c0caf5;
+}
+
+#blkPreview .hljs-built_in,
+#blkPreview .hljs-class .hljs-title {
+  color: #f09a55; /* matches editor.css --accent2 */
+}
+
+#blkPreview .hljs-params {
+  color: #d7d9dd;
+}
+
+#blkPreview .hljs-comment .hljs-doctag,
+#blkPreview .hljs-meta {
+  color: #565f89;
+}
+
+#blkPreview .hljs-deletion {
+  color: #f7768e;
+}
+
+#blkPreview .hljs-emphasis {
+  font-style: italic;
+}
+
+#blkPreview .hljs-strong {
+  font-weight: 600;
+}

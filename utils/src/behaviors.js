@@ -295,6 +295,7 @@ function number(initial = 0, { round: roundMode = null } = {}) {
     if (roundMode === 'nearest') return math.round(v);
     if (roundMode === 'up') return math.ceil(v);
     if (roundMode === 'down') return math.floor(v);
+    
     return v;
   };
   return {
@@ -364,15 +365,22 @@ function toggle({ loop = true, startOn = 1 } = {}) {
   };
 }
 
-/** Router — Select Specific / Always Increment / Randomize Next Route. */
+/**
+ * Router — Select Specific Route ('specific') / Always Increment Route
+ * ('increment') / Randomize Next Route ('random'). `routeCount` ("Available
+ * Routes") is clamped to 1-32, matching the up-to-32 out1..out32 outputs
+ * described by the docs. `select` takes a 1-based route number (out1 = 1),
+ * same numbering as the outN outputs it targets.
+ */
 function router({ mode = 'increment', routeCount = 2 } = {}) {
+  const count = Math.min(32, Math.max(1, Math.floor(routeCount) || 1));
   let index = 0;
   return {
-    select: n => { index = ((n % routeCount) + routeCount) % routeCount; },
+    select: n => { const i = Math.floor(n) || 0; index = ((i - 1) % count + count) % count; },
     send: (value, outs) => {
-      if (mode === 'random') index = math.floor(random(0, routeCount));
+      if (mode === 'random') index = math.floor(random(0, count));
       outs[index]?.(value);
-      if (mode === 'increment') index = (index + 1) % routeCount;
+      if (mode === 'increment') index = (index + 1) % count;
     }
   };
 }

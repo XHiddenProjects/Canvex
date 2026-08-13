@@ -6,6 +6,7 @@
   <meta name="description" content="ForgeEngine editor">
   <title>ForgeEngine Editor</title>
   <link rel="stylesheet" href="/assets/css/editor.css">
+  <link rel="stylesheet" href="/assets/css/vendor/highlight-forge-theme.css">
 </head>
 <body>
   <div class="app" id="app">
@@ -163,9 +164,20 @@
   </div>
   <script src="/assets/js/forge-3d-utils.js"></script>
   <script src="/assets/js/editor.js"></script>
+  <!-- Real Three.js viewport (WebGL scene, cameras, OrbitControls / TransformControls)
+       for both the 2D and 3D editor modes. Loaded as an external module (deferred)
+       so it runs after editor.js has set up window.__forgeState. External file
+       (not an inline <script type="module"> block) because the server's CSP is
+       script-src 'self' with no 'unsafe-inline'. -->
+  <script type="module" src="/assets/js/forge-viewport-init.js"></script>
   <script src="/assets/js/pixel-editor.js"></script>
-  <script src="/assets/js/model-editor.js"></script>
+  <script type="module" src="/assets/js/model-editor.js"></script>
   <script src="/assets/js/shader-editor.js"></script>
+  <!-- Vendored (not CDN — the server's CSP is script-src 'self') build of
+       highlight.js: lib/core + the javascript language only, bundled into a
+       single browser global `hljs` with esbuild. Used by block-editor.js to
+       syntax-highlight the Generated Code tab. -->
+  <script src="/assets/js/vendor/highlight/highlight.min.js"></script>
   <script src="/assets/js/block-editor.js"></script>
   <script src="/assets/js/animation-editor.js"></script>
   <script src="/assets/js/audio-editor.js"></script>

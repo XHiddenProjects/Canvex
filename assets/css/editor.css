@@ -470,9 +470,10 @@ button {
 #threeCanvas.panning {
     cursor: grabbing;
 }
-.viewport[data-mode="3d"] #viewportObjects {
-    display: none;
-}
+/* #viewportObjects is intentionally left empty at runtime — see the comment
+   above renderViewportObjects() in editor.js. All object shapes are drawn by
+   the canvas (#threeCanvas) for both 2D and 3D, so there's nothing left to
+   hide/show here per mode. */
 .viewport-overlay {
     position: absolute;
     display: flex;
@@ -561,91 +562,14 @@ button {
 .viewport[data-mode="2d"] .axis-gizmo {
     display: none;
 }
-.scene-object {
-    position: absolute;
-    z-index: 2;
-    text-align: center;
-    color: #adb2ba;
-}
-.scene-object label {
-    display: block;
-    background: #181b20c9;
-    padding: 2px 4px;
-    border-radius: 2px;
-    margin-top: 4px;
-    white-space: nowrap;
-    font-size: 10px;
-}
-.camera-object {
-    left: 18%;
-    top: 22%;
-    font-size: 25px;
-    color: #6f9fd2;
-}
-.light-object {
-    right: 21%;
-    top: 24%;
-    font-size: 28px;
-    color: #e4b951;
-}
-.sprite-object {
-    left: 49%;
-    top: 43%;
-    transform: translate(-50%, -50%);
-}
-.player-shape {
-    display: grid;
-    place-items: center;
-    width: 54px;
-    height: 54px;
-    background: linear-gradient(145deg, #f1904f, #a94720);
-    border: 2px solid #f4b27d;
-    color: #fff;
-    font-size: 25px;
-    font-weight: 900;
-    box-shadow: 0 8px 20px #0008;
-}
-.selection-box {
-    position: relative;
-    padding: 7px;
-    border: 1px solid var(--accent2);
-}
-.handle {
-    position: absolute;
-    width: 6px;
-    height: 6px;
-    background: #fff;
-    border: 1px solid var(--accent);
-    border-radius: 1px;
-}
-.nw {
-    left: -4px;
-    top: -4px;
-}
-.ne {
-    right: -4px;
-    top: -4px;
-}
-.sw {
-    left: -4px;
-    bottom: -4px;
-}
-.se {
-    right: -4px;
-    bottom: -4px;
-}
-.platform-object {
-    left: 36%;
-    top: 68%;
-    width: 33%;
-}
-.platform-object > div {
-    height: 24px;
-    background: #545b65;
-    border: 1px solid #777f8a;
-    transform: skewX(-18deg);
-    box-shadow: 0 8px 12px #0007;
-}
+/* Object shapes, selection handles, the "possessed sprite" look, and the
+   attachment-count badge are all drawn on the canvas now (see drawObject2D /
+   drawObject / drawAttachBadge in editor.js) — that's the single place any
+   object is rendered, for both the 2D and 3D workspace tabs, sized to match
+   the grid. The DOM classes that used to duplicate this (.scene-object,
+   .camera-object, .light-object, .sprite-object, .platform-object,
+   .object-shape, .selection-box, .handle, .possessed-sprite) have been
+   removed along with the JS that generated them. */
 .debug-panel {
     display: none;
     position: absolute;
@@ -1144,6 +1068,149 @@ button {
 .forge-block-slot.drag-over { border-color: var(--accent); background: rgba(120,140,255,0.06); }
 .forge-block { display: flex; align-items: center; gap: 8px; background: #23272e; border: 1px solid #3a3f47; border-radius: 6px; padding: 6px 8px; }
 .forge-block button { margin-left: auto; color: #9298a1; }
+
+/* ===========================================================================
+   Block Editor (node / connector graph) — sidebar, canvas, nodes, wires,
+   and the live Test Mode console.
+   =========================================================================== */
+
+.fbe { font-size: 12px; }
+
+/* --- Sidebar: collapsible categories, icons, styled list rows --- */
+.fbe-sidebar { gap: 6px; }
+.fbe-sidebar-search { display: flex; align-items: center; gap: 6px; background: #14161a; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; color: #8b909a; }
+.fbe-sidebar-search input { flex: 1; background: transparent; border: none; color: #e5e7eb; font-size: 12px; padding: 2px 0; }
+.fbe-sidebar-search input:focus { outline: none; }
+.fbe-cat { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #1a1d22; }
+.fbe-cat + .fbe-cat { margin-top: 6px; }
+.fbe-cat-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 8px; background: #20242b; border: none; border-left: 3px solid var(--cat-color, #888); cursor: pointer; color: #e5e7eb; text-align: left; }
+.fbe-cat-head:hover { background: #262a32; }
+.fbe-cat-icon { font-size: 13px; }
+.fbe-cat-label { font-weight: 600; font-size: 11.5px; letter-spacing: .02em; flex: 1; }
+.fbe-cat-count { font-size: 10px; color: #8b909a; background: #14161a; border-radius: 999px; padding: 1px 6px; }
+.fbe-cat-chevron { transition: transform .15s ease; color: #8b909a; font-size: 11px; }
+.fbe-cat-chevron.is-collapsed { transform: rotate(-90deg); }
+.fbe-cat-body { display: flex; flex-direction: column; padding: 4px; gap: 3px; max-height: 600px; overflow: hidden; transition: max-height .15s ease, padding .15s ease; }
+.fbe-cat-body.is-collapsed { max-height: 0; padding: 0 4px; }
+.fbe-item { display: flex; align-items: center; gap: 7px; padding: 5px 7px; border-radius: 6px; border: 1px solid transparent; border-left: 2px solid var(--cat-color, #888); background: #22252b; cursor: grab; }
+.fbe-item:hover { background: #282c34; border-color: var(--line2); }
+.fbe-item:active { cursor: grabbing; }
+.fbe-item-icon { font-size: 13px; width: 16px; text-align: center; }
+.fbe-item-label { flex: 1; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; color: #d7dae0; }
+.fbe-item-add { color: #6d7280; font-size: 12px; opacity: 0; transition: opacity .1s; }
+.fbe-item:hover .fbe-item-add { opacity: 1; color: var(--cat-color, var(--accent)); }
+
+/* --- Canvas / graph surface --- */
+.fbe-canvas-wrap { flex: 1; min-height: 0; overflow: auto; background: #14161a; position: relative; }
+.fbe-canvas {
+  position: relative; min-width: 1600px; min-height: 900px;
+  background-image: radial-gradient(circle, #2a2e35 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+.fbe-canvas.drag-over { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.fbe-wires { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.fbe-wire { fill: none; stroke: #6d7280; stroke-width: 2; pointer-events: stroke; cursor: pointer; }
+.fbe-wire:hover { stroke: var(--danger); }
+.fbe-wire--exec { stroke: #e9edf2; stroke-width: 2.5; }
+.fbe-wire--value { stroke: #5aa9e6; stroke-dasharray: 0; }
+.fbe-wire--ghost { stroke-dasharray: 5 4; opacity: .8; pointer-events: none; }
+.fbe-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 30px; max-width: 360px; margin: auto; }
+
+/* --- Nodes --- */
+.fbe-node {
+  position: absolute; width: 240px; background: #23262c; border: 1px solid #3a3f47; border-radius: 9px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.35); overflow: hidden; user-select: none;
+}
+.fbe-node.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(228,123,53,.35), 0 4px 14px rgba(0,0,0,.35); }
+.fbe-node-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: linear-gradient(180deg, color-mix(in srgb, var(--cat-color, #888) 28%, #23262c), #23262c 90%); border-bottom: 1px solid #3a3f47; border-top: 2px solid var(--cat-color, #888); cursor: grab; }
+.fbe-node-head:active { cursor: grabbing; }
+.fbe-node-icon { font-size: 13px; }
+.fbe-node-title { font-weight: 700; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; color: #fff; }
+.fbe-node-cat { margin-left: auto; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: #b7bcc4; opacity: .8; }
+.fbe-node-close { color: #9298a1; font-size: 13px; line-height: 1; padding: 2px 4px; }
+.fbe-node-close:hover { color: #fff; background: var(--danger); border-radius: 4px; }
+.fbe-node-body { display: flex; flex-direction: column; padding: 6px 0; gap: 2px; }
+.fbe-io-in, .fbe-io-out { display: flex; flex-direction: column; }
+.fbe-io-out { border-top: 1px dashed #33373f; margin-top: 4px; padding-top: 4px; }
+.fbe-pinrow { display: flex; align-items: center; gap: 6px; padding: 3px 8px; position: relative; }
+.fbe-pinrow--exec { font-weight: 600; }
+.fbe-pinrow--out { justify-content: flex-end; }
+.fbe-pin-label { font-size: 10.5px; color: #b7bcc4; white-space: nowrap; }
+.fbe-pinrow--out .fbe-pin-label { margin-right: auto; }
+.fbe-pinrow input, .fbe-pinrow select { flex: 1; min-width: 0; font-size: 10.5px; padding: 2px 4px; }
+.fbe-pinrow input[type="checkbox"] { flex: none; }
+.fbe-wired-tag { flex: 1; font-size: 10px; color: #5aa9e6; font-style: italic; }
+.fbe-badge { font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; color: #d7dae0; background: #14161a; border: 1px solid #33373f; border-radius: 4px; padding: 1px 6px; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.fbe-pin { width: 11px; height: 11px; border-radius: 50%; background: #14161a; border: 2px solid #5aa9e6; flex: none; cursor: crosshair; }
+/* Placeholder for `preset` inputs (Number's Initial/Round, ...), which have
+   no wire pin at all — keeps the label/control column aligned with rows
+   that do have a pin. */
+.fbe-pin-spacer { width: 11px; height: 11px; flex: none; }
+.fbe-pin--exec { border-radius: 2px; transform: rotate(45deg); border-color: #e9edf2; }
+.fbe-pin--right { margin-left: 2px; }
+.fbe-pin:hover { background: var(--accent); border-color: var(--accent); }
+.fbe-pin.fbe-flash { animation: fbePulsePin .5s ease; }
+@keyframes fbePulsePin { 0% { box-shadow: 0 0 0 0 rgba(228,123,53,.7); } 100% { box-shadow: 0 0 0 8px rgba(228,123,53,0); } }
+
+/* .fbe-node-body .fbe-node-icon { } */
+.fbe-nodes-layer { position: relative; }
+#fbeNodes.is-live .fbe-node { box-shadow: 0 0 0 1px rgba(94,207,143,.25), 0 4px 14px rgba(0,0,0,.35); }
+
+/* --- Toolbar extras --- */
+.fbe-toolbar-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+.fbe-play { background: #23272e; border: 1px solid #3a3f47; }
+.fbe-play.is-live { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* --- Bottom dock: Generated Code / Test Console tabs --- */
+.fbe-bottom { border-top: 1px solid var(--line); display: flex; flex-direction: column; max-height: 42%; }
+.fbe-bottom-tabs { display: flex; gap: 2px; padding: 6px 8px 0; }
+.fbe-bottom-tabs button { background: transparent; border: 1px solid transparent; border-bottom: none; padding: 5px 10px; border-radius: 6px 6px 0 0; color: #9298a1; }
+.fbe-bottom-tabs button.active { background: #20242b; border-color: var(--line); color: #fff; }
+.fbe-bottom-body { background: #20242b; border-top: 1px solid var(--line); overflow: auto; padding: 8px; flex: 1; min-height: 120px; }
+.fbe-bpanel { display: none; }
+.fbe-bpanel.active { display: block; }
+
+.fbe-test-grid { display: grid; grid-template-columns: 1.1fr 1fr 1.2fr; gap: 10px; align-items: start; }
+.fbe-stage { position: relative; height: 180px; border: 1px dashed #3e444d; border-radius: 8px; background: #14161a; display: flex; align-items: center; justify-content: center; text-align: center; cursor: pointer; overflow: hidden; }
+.fbe-stage:focus { outline: 2px solid var(--accent); }
+.fbe-stage-hint { color: #6d7280; font-size: 11px; padding: 0 14px; }
+.fbe-stage-flash { position: absolute; inset: 0; border-radius: 8px; background: rgba(228,123,53,0); pointer-events: none; }
+.fbe-stage-flash.fbe-flash { animation: fbeStageFlash .4s ease; }
+@keyframes fbeStageFlash { 0% { background: rgba(228,123,53,.35); } 100% { background: rgba(228,123,53,0); } }
+
+/* GUI overlay — Bar / Alert / Label / Cursor blocks rendered live on the stage */
+.fbe-gui-layer { position: absolute; inset: 0; pointer-events: none; }
+.fbe-gui-el { position: absolute; pointer-events: auto; cursor: grab; user-select: none; z-index: 2; }
+.fbe-gui-el:active { cursor: grabbing; }
+.fbe-gui-el--label .fbe-gui-text { display: inline-block; min-width: 40px; padding: 3px 7px; background: rgba(20,22,26,.85); border: 1px solid var(--line2); border-radius: 5px; color: #e5e7eb; font-size: 12px; font-weight: 600; }
+.fbe-gui-el--label .fbe-gui-text:focus { outline: 2px solid var(--accent); }
+.fbe-gui-el--bar { width: 110px; }
+.fbe-gui-bar-track { width: 100%; height: 14px; background: #22252b; border: 1px solid var(--line2); border-radius: 999px; overflow: hidden; cursor: pointer; }
+.fbe-gui-bar-fill { height: 100%; background: linear-gradient(90deg, #5ecf8f, #3fae70); transition: width .12s ease; }
+.fbe-gui-el--alert { width: 150px; padding: 8px; background: rgba(26,29,34,.95); border: 1px solid var(--line2); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+.fbe-gui-el--alert.fbe-flash { animation: fbeStageFlash .4s ease; }
+.fbe-gui-alert-title { font-size: 11.5px; font-weight: 700; color: #f083b0; margin-bottom: 2px; }
+.fbe-gui-alert-msg { font-size: 11px; color: #c7cad0; margin-bottom: 6px; }
+.fbe-gui-alert-title:focus, .fbe-gui-alert-msg:focus { outline: 1px solid var(--accent); }
+.fbe-gui-alert-btn { font-size: 10.5px; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--line2); background: #f083b0; color: #1a1d22; font-weight: 700; cursor: pointer; }
+.fbe-gui-cursor-tag { display: inline-block; padding: 2px 7px; background: rgba(20,22,26,.85); border: 1px solid var(--line2); border-radius: 999px; color: #8fd15a; font-size: 10.5px; }
+
+.fbe-watch, .fbe-eventlog { background: #1a1d22; border: 1px solid var(--line); border-radius: 8px; padding: 8px; height: 160px; display: flex; flex-direction: column; }
+.fbe-watch-list, .fbe-log-list { overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.fbe-watch-row { display: flex; justify-content: space-between; gap: 6px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10.5px; padding: 3px 6px; border-radius: 4px; background: #14161a; }
+.fbe-watch-name { color: #b7bcc4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fbe-watch-val { color: #5ecf8f; font-weight: 700; }
+.fbe-watch-row.fbe-flash, .fbe-badge.fbe-flash { animation: fbeValueFlash .6s ease; }
+@keyframes fbeValueFlash { 0% { background: rgba(94,207,143,.35); } 100% { background: transparent; } }
+.fbe-log-row { display: flex; align-items: center; gap: 6px; font-size: 10.5px; padding: 2px 4px; }
+.fbe-log-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.fbe-log-time { color: #6d7280; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9.5px; }
+.fbe-log-msg code { color: #d7dae0; background: #14161a; border-radius: 3px; padding: 0 3px; }
+
+@media (max-width: 900px) {
+  .fbe-test-grid { grid-template-columns: 1fr; }
+}
 
 .console-view {
     flex-direction: column;

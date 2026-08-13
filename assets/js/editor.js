@@ -7,14 +7,12 @@
 
   const ICONS = { camera: '◈', light: '☀', sprite: '◆', mesh: '▰', group: '▾', collider: '⬡', ui: '▣', audio: '♪' };
   const TYPE_LABELS = { camera: 'Camera', light: 'Directional Light', sprite: 'Sprite Object', mesh: 'Mesh Object', group: 'Node Group', collider: 'Collider 2D', ui: 'UI Canvas', audio: 'Audio Source' };
-  const VIEWPORT_SLOTS = {
-    camera: { className: 'camera-object', markup: o => `<span>${o.icon}</span><label>${escapeHtml(o.name)}</label>` },
-    light: { className: 'light-object', markup: o => `<span>${o.icon}</span><label>${escapeHtml(o.name)}</label>` },
-    sprite: { className: 'sprite-object', markup: (o, selected) => selected
-      ? `<div class="selection-box"><i class="handle nw"></i><i class="handle ne"></i><i class="handle sw"></i><i class="handle se"></i><div class="player-shape">${escapeHtml(o.name[0] || '?')}</div></div><label>${escapeHtml(o.name)}</label>`
-      : `<div class="player-shape">${escapeHtml(o.name[0] || '?')}</div><label>${escapeHtml(o.name)}</label>` },
-    mesh: { className: 'platform-object', markup: o => `<div></div><label>${escapeHtml(o.name)}</label>` }
-  };
+  // Object shapes (including the "attached image" and "selected" look, and
+  // the small attachment-count badge) are drawn once, by the canvas renderer
+  // further down this file — see drawObject2D/drawObject and drawAttachBadge.
+  // There used to be a second, DOM-based copy of this rendering here that
+  // drew every object again at a fixed screen position/size, which is why
+  // objects appeared doubled in the viewport; it has been removed.
 
   function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -129,7 +127,10 @@
       tag: o.tag || 'Untagged',
       layer: o.layer || 'Default',
       // Scripts/assets attached via the context menu or Add Component.
-      attachments: Array.isArray(o.attachments) ? o.attachments : []
+      attachments: Array.isArray(o.attachments) ? o.attachments : [],
+      // When an image/pixel-art/model asset is attached, the object's
+      // viewport representation switches to that asset (see openAttachPicker).
+      spriteUrl: o.spriteUrl || null
     };
   }
 
@@ -269,22 +270,26 @@
   }
   window.__forgeRenderAttachments = renderAttachments;
 
+  // NOTE: object shapes themselves are no longer drawn here. They are drawn
+  // exactly once, by the canvas-based 2D/3D renderer further down this file
+  // (see drawObject2D / drawObject / render()), which already positions each
+  // object at its real world position and sizes it to match a full grid cell
+  // — scaling correctly with pan/zoom and swapping between the flat 2D shape
+  // and the 3D shape depending on the active workspace tab. This function
+  // used to *also* render a second copy of every object into #viewportObjects
+  // at a fixed screen-percentage position with a fixed pixel size, which is
+  // why every object appeared twice (a correctly placed/sized one from the
+  // canvas, plus a stray duplicate stuck at the same spot regardless of the
+  // object's actual position, zoom, or 2D/3D mode). #viewportObjects is kept
+  // around only in case future UI wants a DOM layer over the canvas, but it
+  // no longer draws anything, so there is exactly one shape per object.
   function renderViewportObjects() {
     const container = $('#viewportObjects');
-    const counts = {};
-    container.innerHTML = state.objects.map(o => {
-      const slot = VIEWPORT_SLOTS[o.type];
-      if (!slot) return '';
-      const n = counts[o.type] = (counts[o.type] || 0);
-      counts[o.type]++;
-      const selected = o.id === state.selectedId;
-      const nudge = n * 4;
-      return `<div class="scene-object ${slot.className} ${selected ? 'selected' : ''}" data-object-id="${o.id}" style="margin-left:${nudge}px;margin-top:${nudge}px">${slot.markup(o, selected)}</div>`;
-    }).join('');
-    $$('.scene-object').forEach(el => el.addEventListener('click', e => { e.stopPropagation(); selectObject(el.dataset.objectId); }));
+    container.innerHTML = '';
     $('#viewportHint').textContent = state.objects.length === 0
       ? 'Scene is empty · use + in the Scene panel to add your first object'
       : (state.mode === '2d' ? 'Gridmap · Drag to pan · Wheel to zoom' : 'Gridmap · WASD to move around · Right-drag to orbit · Wheel to zoom · Drag an object to move it');
+    window.forgeRedraw3D?.();
   }
 
   // ---------------------------------------------------------------
@@ -922,9 +927,19 @@
           o.attachments ||= [];
           if (o.attachments.some(a => a.assetId === asset.id)) { toast(`${asset.name} is already attached`); return; }
           o.attachments.push({ id: `att-${Date.now().toString(36)}`, assetId: asset.id, name: asset.name, category: asset.category });
+          // Image (pixel-art, texture, etc.) and model assets replace the
+          // object's placeholder shape with the asset itself — the object
+          // now "possesses" that visual, everywhere it's drawn.
+          if ((asset.category === 'image' || asset.category === 'model') && asset.url) {
+            o.spriteUrl = asset.url;
+          }
           state.dirty = true;
           document.getElementById('dirtyDot').style.visibility = 'visible';
           window.__forgeRenderAttachments?.(o);
+          // Re-render the tree/inspector/viewport so the swapped-in sprite
+          // and the attachment badge show up immediately.
+          window.__forgeSelectObject?.(o.id);
+          window.forgeRedraw3D?.();
           modal.close();
           toast(`${asset.name} attached to ${o.name}`);
           log('info', `Attached "${asset.name}" to "${o.name}"`);
@@ -1041,9 +1056,10 @@
 
   // Hierarchy rows are re-rendered often, so delegate from the tree container.
   wireContextTarget($('#sceneTree'), e => e.target.closest('.tree-row')?.dataset.id || null);
-  // Empty viewport / 2D scene objects.
-  wireContextTarget($('#viewportObjects'), e => e.target.closest('.scene-object')?.dataset.objectId || null);
-  // 3D canvas: hit-tested by the viewport controller below.
+  // Viewport (both 2D and 3D): hit-tested by the canvas renderer below,
+  // which already knows how to hit-test either mode (see forgeHitTest3D).
+  // The old separate #viewportObjects DOM hit-target has been removed along
+  // with the duplicate shapes it used to draw.
   wireContextTarget($('#threeCanvas'), e => window.forgeHitTest3D?.(e.clientX, e.clientY)?.id || null);
 })();
 
@@ -1080,639 +1096,37 @@
    it isn't drawn here.
 --------------------------------------------------------------- */
 (() => {
+  // ---------------------------------------------------------------
+  // This used to be a full hand-rolled Canvas2D 3D/2D renderer that
+  // called canvas.getContext('2d') on #threeCanvas — which permanently
+  // locks that canvas out of ever getting a WebGL context. That's now
+  // owned entirely by forge-viewport.js (a real Three.js WebGL scene,
+  // camera, gizmos, render loop, resize, and hit-testing). All that's
+  // left here is the handful of small UI bindings forge-viewport.js
+  // doesn't already cover: the shading-mode cycle button, the pause
+  // button, and the command palette popover.
+  // ---------------------------------------------------------------
   const $ = s => document.querySelector(s);
   const state = window.__forgeState;
   const viewport = $('#viewport');
   const canvas = $('#threeCanvas');
   if (!state || !viewport || !canvas) return;
-  const ctx = canvas.getContext('2d');
-  const toast = msg => window.__forgeToast?.(msg);
 
-  const camera = state.camera ||= { yaw: 0.68, pitch: -0.52, distance: 42, targetX: 0, targetY: 0, targetZ: 0 };
-  state.grid = state.grid !== false;
-  state.cameraProjection ||= 'perspective';
-  state.ui ||= {};
-  state.ui.sun ??= true;
-  state.ui.ambient ??= true;
-  state.ui.fog ??= false;
-  state.ui.gizmos ??= true;
-  state.ui.debug ??= false;
+  // Defensive default — forge-viewport.js reads/writes state.view2d.x/y/zoom
+  // as soon as the user pans or zooms the flat editor.
   state.view2d ||= { x: 0, y: 0, zoom: 1 };
 
-  const interaction = new (window.Forge3D?.Interaction ?? class {
-    constructor() { this._debug = false; this._orbit = { sensitivityX: 1, sensitivityY: 1, sensitivityZ: 1 }; }
-    debugMode(state = true) { this._debug = state; return this; }
-    noDebugMode() { this._debug = false; return this; }
-    orbitControl(sensitivityX = 1, sensitivityY = 1, sensitivityZ = 1) { this._orbit = { sensitivityX, sensitivityY, sensitivityZ }; return this._orbit; }
-  })();
-  const orbitConfig = interaction.orbitControl(1.18, 1.1, 1.15);
-  interaction.debugMode(state.ui.debug);
+  function refreshEditor() { document.querySelector(`[data-id="${state.selectedId}"]`)?.click(); }
 
-  const PX_PER_UNIT = 32; // base screen pixels per world unit at zoom=1
-  let dirty = true;
-  const markDirty = () => { dirty = true; };
-  const norm = o => { o.rotation ||= { x: 0, y: 0, z: 0 }; o.scale ||= { x: 1, y: 1, z: 1 }; o.enabled ??= true; o.visible ??= true; return o; };
-  const snap = n => state.snap ? Math.round(n / 16) * 16 : n;
-
-  function resize() {
-    const r = viewport.getBoundingClientRect(), d = devicePixelRatio || 1;
-    canvas.width = Math.max(1, r.width * d);
-    canvas.height = Math.max(1, r.height * d);
-    canvas.style.width = r.width + 'px';
-    canvas.style.height = r.height + 'px';
-    ctx.setTransform(d, 0, 0, d, 0, 0);
-    markDirty();
-  }
-
-  // Perspective/orthographic/isometric projection of a world point to screen space.
-  const CAMERA_DISTANCE = 42;
-  const CAMERA_NEAR = 0.35;
-
-  function cameraSpace(p) {
-    const cy = Math.cos(camera.yaw), sy = Math.sin(camera.yaw);
-    const cp = Math.cos(camera.pitch), sp = Math.sin(camera.pitch);
-    const x = p.x - camera.targetX;
-    const y = p.y - camera.targetY;
-    const z = p.z - camera.targetZ;
-    const rx = x * cy - z * sy;
-    const rz = x * sy + z * cy;
-    return { x: rx, y: y * cp - rz * sp, z: y * sp + rz * cp };
-  }
-
-  function projectCameraPoint(v) {
-    const w = viewport.clientWidth, h = viewport.clientHeight;
-    const orthographic = state.cameraProjection === 'orthographic' || state.cameraProjection === 'isometric';
-    const cameraZ = camera.distance + v.z;
-    if (!orthographic && cameraZ <= CAMERA_NEAR) return null;
-    const scale = orthographic ? 1 : camera.distance / cameraZ;
-    const pixels = PX_PER_UNIT * state.zoom * scale;
-    return { x: w / 2 + v.x * pixels, y: h / 2 - v.y * pixels, depth: v.z, scale, visible: true };
-  }
-
-  function project(p) {
-    return projectCameraPoint(cameraSpace(p));
-  }
-
-  // Clip world lines against the camera near plane before projection.
-  // This prevents lines behind the camera from flipping across the screen.
-  function clippedLine(a, b) {
-    let A = cameraSpace(a), B = cameraSpace(b);
-    const orthographic = state.cameraProjection === 'orthographic' || state.cameraProjection === 'isometric';
-    if (orthographic) return [A, B];
-    const nearDepth = -CAMERA_DISTANCE + CAMERA_NEAR;
-    const aInside = A.z > nearDepth, bInside = B.z > nearDepth;
-    if (!aInside && !bInside) return null;
-    if (aInside !== bInside) {
-      const t = (nearDepth - A.z) / (B.z - A.z);
-      const I = { x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t, z: nearDepth };
-      if (!aInside) A = I; else B = I;
-    }
-    return [A, B];
-  }
-
-  function worldLine(a, b, color, width = 1, alpha = 1) {
-    const clipped = clippedLine(a, b);
-    if (!clipped) return;
-    const A = projectCameraPoint(clipped[0]), B = projectCameraPoint(clipped[1]);
-    if (!A || !B) return;
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.globalAlpha = alpha;
-    ctx.lineWidth = width;
-    ctx.beginPath();
-    ctx.moveTo(A.x, A.y);
-    ctx.lineTo(B.x, B.y);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function screenToPlane(clientX, clientY, planeY = 0) {
-    const r = canvas.getBoundingClientRect();
-    const sx = clientX - r.left - viewport.clientWidth / 2;
-    const sy = clientY - r.top - viewport.clientHeight / 2;
-    const base = PX_PER_UNIT * state.zoom;
-    const orthographic = state.cameraProjection === 'orthographic' || state.cameraProjection === 'isometric';
-    const cy = Math.cos(camera.yaw), syaw = Math.sin(camera.yaw);
-    const cp = Math.cos(camera.pitch), sp = Math.sin(camera.pitch);
-    const pointAtViewDepth = viewZ => {
-      const scale = orthographic ? 1 : camera.distance / (camera.distance + viewZ);
-      const rx = sx / (base * scale);
-      const ry = -sy / (base * scale);
-      const worldY = ry * cp + viewZ * sp;
-      const rz = -ry * sp + viewZ * cp;
-      return {
-        x: camera.targetX + rx * cy + rz * syaw,
-        y: camera.targetY + worldY,
-        z: camera.targetZ - rx * syaw + rz * cy
-      };
-    };
-    const a = pointAtViewDepth(0), b = pointAtViewDepth(1);
-    const dy = b.y - a.y;
-    if (Math.abs(dy) < 1e-6) return null;
-    const t = (planeY - a.y) / dy;
-    return { x: a.x + (b.x - a.x) * t, y: planeY, z: a.z + (b.z - a.z) * t };
-  }
-
-  function screenToGround(clientX, clientY) {
-    return screenToPlane(clientX, clientY, 0);
-  }
-
-  function update3DCursorPosition(clientX, clientY) {
-    const p = screenToGround(clientX, clientY);
-    if (!p) return;
-    $('#cursorPosition').textContent = `X ${Math.round(p.x)}  Y 0  Z ${Math.round(p.z)}`;
-  }
-
-  function worldToScreen2D(p) {
-    const w = viewport.clientWidth, h = viewport.clientHeight;
-    const scale = PX_PER_UNIT * state.view2d.zoom;
-    return { x: w / 2 + (p.x - state.view2d.x) * scale, y: h / 2 - (p.y - state.view2d.y) * scale };
-  }
-
-  function screenToWorld2D(clientX, clientY) {
-    const r = canvas.getBoundingClientRect();
-    const sx = clientX - r.left;
-    const sy = clientY - r.top;
-    const scale = PX_PER_UNIT * state.view2d.zoom;
-    return {
-      x: state.view2d.x + (sx - viewport.clientWidth / 2) / scale,
-      y: state.view2d.y - (sy - viewport.clientHeight / 2) / scale
-    };
-  }
-
-  function update2DCursorPosition(clientX, clientY) {
-    const p = screenToWorld2D(clientX, clientY);
-    $('#cursorPosition').textContent = `X ${Math.round(p.x)}  Y ${Math.round(p.y)}`;
-  }
-
-  function drawGrid2D() {
-    if (!state.grid) return;
-    const w = viewport.clientWidth, h = viewport.clientHeight;
-    const scale = PX_PER_UNIT * state.view2d.zoom;
-    // Pick a world-unit step so each cell renders at roughly targetPixels on
-    // screen, regardless of zoom (same approach as the 3D grid below). The
-    // previous formula omitted PX_PER_UNIT entirely, producing a step whose
-    // cells were ~1024px wide at 100% zoom — effectively invisible.
-    const targetPixels = 32;
-    let step = 1;
-    while (step * scale < targetPixels) step *= 2;
-    while (step * scale >= targetPixels * 2) step /= 2;
-    const origin = worldToScreen2D({ x: 0, y: 0 });
-    // World-space X/Y bounds of the viewport (screen x=0..w, y=0..h), rounded
-    // out to the nearest grid step. Previously this mixed screen-space and
-    // world-space units (subtracting w/2 from a screen coordinate, then
-    // dividing by scale*step instead of scale), which collapsed the loop
-    // range to roughly one cell no matter how big the viewport was.
-    const startX = Math.floor((-origin.x) / scale / step) * step;
-    const endX = Math.ceil((w - origin.x) / scale / step) * step;
-    const startY = Math.floor((-origin.y) / scale / step) * step;
-    const endY = Math.ceil((h - origin.y) / scale / step) * step;
-    ctx.save();
-    ctx.strokeStyle = '#2c333c';
-    ctx.lineWidth = 1;
-    for (let x = startX; x <= endX; x += step) {
-      const p1 = worldToScreen2D({ x, y: startY });
-      const p2 = worldToScreen2D({ x, y: endY });
-      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-    }
-    for (let y = startY; y <= endY; y += step) {
-      const p1 = worldToScreen2D({ x: startX, y });
-      const p2 = worldToScreen2D({ x: endX, y });
-      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-    }
-    ctx.strokeStyle = '#6098df'; ctx.beginPath(); ctx.moveTo(origin.x, 0); ctx.lineTo(origin.x, h); ctx.stroke();
-    ctx.strokeStyle = '#e06060'; ctx.beginPath(); ctx.moveTo(0, origin.y); ctx.lineTo(w, origin.y); ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawObject2D(o, p) {
-    norm(o);
-    const selected = o.id === state.selectedId, hovered = o.id === hoverId;
-    const size = Math.max(10, 16 * state.view2d.zoom);
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.globalAlpha = o.enabled === false ? .35 : 1;
-    ctx.fillStyle = o.type === 'light' ? '#e2b44f' : o.type === 'camera' ? '#6d9de6' : o.type === 'sprite' ? '#e47b35' : '#5b6571';
-    ctx.strokeStyle = selected ? '#ff9d58' : hovered ? '#d8dde4' : '#89929d';
-    ctx.lineWidth = selected ? 2 : 1;
-    const shape = o.type === 'mesh' || o.type === 'collider' || o.type === 'ui' ? 'rect' : 'circle';
-    if (shape === 'rect') {
-      ctx.beginPath(); ctx.rect(-size / 1.6, -size / 1.6, size * 1.6, size * 1.6); ctx.fill(); ctx.stroke();
-    } else {
-      ctx.beginPath(); ctx.arc(0, 0, size * .85, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    }
-    ctx.fillStyle = '#e8ecf0'; ctx.font = '11px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(o.name, 0, size + 14);
-    ctx.restore();
-  }
-
-  // A finite, camera-centered construction grid. X and Z axes are rendered
-  // once as grid lines; the Y axis starts at the same projected origin.
-  function drawGrid() {
-    if (!state.grid) return;
-    const targetPixels = 32;
-    let step = 1;
-    while (step * PX_PER_UNIT * state.zoom < targetPixels) step *= 2;
-    while (step * PX_PER_UNIT * state.zoom >= targetPixels * 2) step /= 2;
-
-    const radius = Math.max(24, Math.min(72,
-      Math.ceil(Math.max(viewport.clientWidth, viewport.clientHeight) /
-      (PX_PER_UNIT * Math.max(.25, state.zoom)) * 1.15 / step) * step));
-    const cx = Math.round(camera.targetX / step) * step;
-    const cz = Math.round(camera.targetZ / step) * step;
-    const startX = Math.floor((cx - radius) / step) * step;
-    const endX = Math.ceil((cx + radius) / step) * step;
-    const startZ = Math.floor((cz - radius) / step) * step;
-    const endZ = Math.ceil((cz + radius) / step) * step;
-
-    for (let x = startX; x <= endX + step * .25; x += step) {
-      const index = Math.round(x / step);
-      const axis = Math.abs(x) < step * .1;
-      const major = Math.abs(index) % 5 === 0;
-      worldLine(
-        { x, y: 0, z: startZ }, { x, y: 0, z: endZ },
-        axis ? '#e06060' : major ? '#46505d' : '#2c333c',
-        axis ? 1.8 : major ? 1.1 : 1,
-        axis ? 1 : major ? .9 : .72
-      );
-    }
-    for (let z = startZ; z <= endZ + step * .25; z += step) {
-      const index = Math.round(z / step);
-      const axis = Math.abs(z) < step * .1;
-      const major = Math.abs(index) % 5 === 0;
-      worldLine(
-        { x: startX, y: 0, z }, { x: endX, y: 0, z },
-        axis ? '#6098df' : major ? '#46505d' : '#2c333c',
-        axis ? 1.8 : major ? 1.1 : 1,
-        axis ? 1 : major ? .9 : .72
-      );
-    }
-
-    const yHeight = Math.max(8, radius * .35);
-    worldLine({ x: 0, y: 0, z: 0 }, { x: 0, y: yHeight, z: 0 }, '#62c987', 2);
-    const yLabel = project({ x: 0, y: yHeight, z: 0 });
-    if (yLabel) {
-      ctx.fillStyle = '#75d99a';
-      ctx.font = 'bold 12px Segoe UI';
-      ctx.fillText('Y', yLabel.x + 6, yLabel.y - 5);
-    }
-  }
-
-  function gizmo() {
-    if (state.tool === 'rotate') { ctx.strokeStyle = '#e9a35c'; ctx.beginPath(); ctx.arc(0, 0, 31, 0, Math.PI * 2); ctx.stroke(); }
-    else if (state.tool === 'scale') { ctx.strokeStyle = '#76a8e5'; ctx.strokeRect(-25, -25, 50, 50); }
-    else { ctx.strokeStyle = '#df6666'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(40, 0); ctx.stroke(); ctx.strokeStyle = '#6ac389'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -40); ctx.stroke(); }
-  }
-
-  const wireframe = () => $('#shadingMode')?.dataset.mode === 'wireframe';
-  const solid = () => $('#shadingMode')?.dataset.mode === 'solid';
-
-  function drawObject(o, p) {
-    norm(o);
-    const selected = o.id === state.selectedId, hovered = o.id === hoverId;
-    const size = Math.max(9, 15 * p.scale * state.zoom);
-    const sx = size * Math.max(.15, Math.abs(o.scale.x)), sy = size * Math.max(.15, Math.abs(o.scale.y));
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(-(o.rotation.z || 0) * Math.PI / 180);
-    ctx.globalAlpha = o.enabled === false ? .3 : 1;
-    const lit = solid() ? 1 : (state.ui.sun ? 1 : .72) * (state.ui.ambient ? 1 : .78);
-    ctx.fillStyle = o.type === 'light' ? `rgba(226,180,79,${lit})` : o.type === 'camera' ? `rgba(105,159,216,${lit})` : o.type === 'sprite' ? `rgba(228,123,53,${lit})` : `rgba(91,101,113,${lit})`;
-    ctx.strokeStyle = selected ? '#ff9d58' : hovered ? '#d8dde4' : '#89929d';
-    ctx.lineWidth = selected ? 2 : 1;
-    if (o.type === 'mesh' || o.type === 'collider' || o.type === 'ui') {
-      ctx.beginPath(); ctx.rect(-sx, -sy, sx * 2, sy * 2);
-      if (!wireframe()) ctx.fill();
-      ctx.stroke();
-    } else {
-      ctx.beginPath(); ctx.arc(0, 0, Math.max(sx, 10), 0, Math.PI * 2);
-      if (!wireframe()) ctx.fill();
-      ctx.stroke();
-    }
-    if (selected && state.ui.gizmos !== false) {
-      ctx.setLineDash([4, 3]); ctx.strokeStyle = '#fff'; ctx.strokeRect(-sx - 5, -sy - 5, sx * 2 + 10, sy * 2 + 10); ctx.setLineDash([]);
-      gizmo();
-    }
-    ctx.fillStyle = '#dde1e6'; ctx.font = '11px Segoe UI'; ctx.textAlign = 'center';
-    ctx.fillText(o.name, 0, sy + 17);
-    ctx.restore();
-  }
-
-  function render() {
-    const w = viewport.clientWidth, h = viewport.clientHeight;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#171a1f'; ctx.fillRect(0, 0, w, h);
-    if (state.mode === '2d') {
-      drawGrid2D();
-      state.objects.filter(o => o.visible !== false).map(o => ({ o: norm(o), p: worldToScreen2D(o.position) })).forEach(({ o, p }) => drawObject2D(o, p));
-    } else {
-      drawGrid();
-      state.objects.filter(o => o.visible !== false).map(o => ({ o: norm(o), p: project(o.position) })).sort((a, b) => a.p.depth - b.p.depth).forEach(({ o, p }) => drawObject(o, p));
-      if (state.ui.fog) {
-        const fog = ctx.createLinearGradient(0, h * .35, 0, h);
-        fog.addColorStop(0, 'rgba(120,135,150,0)'); fog.addColorStop(1, 'rgba(120,135,150,.2)');
-        ctx.fillStyle = fog; ctx.fillRect(0, 0, w, h);
-      }
-    }
-    renderDebug();
-    dirty = false;
-  }
-  window.forgeRedraw3D = () => markDirty();
-
-  function hit(clientX, clientY) {
-    const r = canvas.getBoundingClientRect(), x = clientX - r.left, y = clientY - r.top;
-    let found = null, best = 30;
-    for (const o of state.objects) {
-      if (o.visible === false) continue;
-      const p = project(o.position);
-      if (!p) continue;
-      const size = Math.max(9, 15 * p.scale * state.zoom) + 6;
-      const d = Math.hypot(x - p.x, y - p.y);
-      if (d < size && d < best) { found = o; best = d; }
-    }
-    return found;
-  }
-  function hit2D(clientX, clientY) {
-    const p = screenToWorld2D(clientX, clientY);
-    let found = null, best = 24;
-    for (const o of state.objects) {
-      if (o.visible === false) continue;
-      const dx = p.x - (o.position?.x || 0), dy = p.y - (o.position?.y || 0);
-      const d = Math.hypot(dx, dy);
-      if (d < 20 && d < best) { found = o; best = d; }
-    }
-    return found;
-  }
-  window.forgeHitTest3D = (clientX, clientY) => (state.mode === '2d' ? hit2D(clientX, clientY) : hit(clientX, clientY));
-  window.forgeResetCamera = () => { state.view2d = { x: 0, y: 0, zoom: 1 }; camera.targetX = camera.targetY = camera.targetZ = 0; camera.yaw = 0.68; camera.pitch = -0.52; camera.distance = CAMERA_DISTANCE; state.zoom = 1; $('#zoomValue').textContent = '100%'; markDirty(); };
-  window.forgeFocusCamera = o => { if (state.mode === '2d') { state.view2d.x = o.position?.x || 0; state.view2d.y = o.position?.y || 0; } else { camera.targetX = o.position.x; camera.targetY = o.position.y; camera.targetZ = o.position.z; } markDirty(); };
-
-  function refreshEditor() { document.querySelector(`[data-id="${state.selectedId}"]`)?.click(); markDirty(); }
-
-  // --- Pointer-based controls (mouse + touch in one code path) ---
-  let hoverId = null;
-  let drag = null; // {kind: 'orbit'|'pan'|'object', ...}
-  const pointers = new Map(); // active touches, for pinch/two-finger pan
-
-  function setCursorClass(kind) {
-    canvas.classList.toggle('orbiting', kind === 'orbit');
-    canvas.classList.toggle('panning', kind === 'pan');
-  }
-
-  // WASD (and arrow keys as fallback) move the camera around the grid
-  // camera-relative, so "W" always moves away from the camera on screen
-  // regardless of orbit angle. This replaces left-click-drag-to-pan, so
-  // LMB is free to be used only for selecting/moving objects.
-  const moveKeys = new Set();
-  const moveKeySet = new Set(['w', 'a', 's', 'd', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
-  addEventListener('keydown', e => {
-    if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName)) return;
-    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (moveKeySet.has(key)) { moveKeys.add(key); e.preventDefault(); }
-  });
-  addEventListener('keyup', e => {
-    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    moveKeys.delete(key);
-  });
-  addEventListener('blur', () => moveKeys.clear());
-  function applyArrowPan(dt) {
-    if (state.mode === '2d' || moveKeys.size === 0) return;
-    const speed = 18 * dt * (1 / Math.max(.3, state.zoom));
-    const cy = Math.cos(camera.yaw), sy = Math.sin(camera.yaw);
-    const fwd = { x: sy, z: cy }, right = { x: cy, z: -sy };
-    let mx = 0, mz = 0;
-    if (moveKeys.has('w') || moveKeys.has('ArrowUp')) { mx += fwd.x; mz += fwd.z; }
-    if (moveKeys.has('s') || moveKeys.has('ArrowDown')) { mx -= fwd.x; mz -= fwd.z; }
-    if (moveKeys.has('a') || moveKeys.has('ArrowLeft')) { mx -= right.x; mz -= right.z; }
-    if (moveKeys.has('d') || moveKeys.has('ArrowRight')) { mx += right.x; mz += right.z; }
-    if (mx || mz) { camera.targetX += mx * speed; camera.targetZ += mz * speed; markDirty(); }
-  }
-
-  function beginDrag(kind, clientX, clientY, hitObject) {
-    if (state.mode === '2d') {
-      if (hitObject) {
-        state.selectedId = hitObject.id;
-        norm(hitObject);
-        const world = screenToWorld2D(clientX, clientY);
-        drag = { kind: 'object', x: clientX, y: clientY, before: JSON.parse(JSON.stringify(hitObject)), startWorld: world };
-        refreshEditor();
-      } else {
-        drag = { kind, x: clientX, y: clientY, moved: false, viewX: state.view2d.x, viewY: state.view2d.y };
-      }
-    } else if (hitObject) {
-      state.selectedId = hitObject.id;
-      norm(hitObject);
-      drag = { kind: 'object', x: clientX, y: clientY, before: JSON.parse(JSON.stringify(hitObject)), ground: screenToGround(clientX, clientY) };
-      refreshEditor();
-    } else {
-      drag = { kind, x: clientX, y: clientY, moved: false, yaw: camera.yaw, pitch: camera.pitch, tx: camera.targetX, ty: camera.targetY, tz: camera.targetZ };
-    }
-    setCursorClass(drag.kind);
-  }
-
-  function updateDrag(clientX, clientY) {
-    if (!drag) return;
-    const dx = clientX - drag.x, dy = clientY - drag.y;
-    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) drag.moved = true;
-    if (state.mode === '2d') {
-      if (drag.kind === 'pan') {
-        state.view2d.x = drag.viewX - dx / (PX_PER_UNIT * state.view2d.zoom);
-        state.view2d.y = drag.viewY + dy / (PX_PER_UNIT * state.view2d.zoom);
-      } else if (drag.kind === 'object') {
-        const o = state.objects.find(x => x.id === state.selectedId);
-        if (!o) return;
-        const world = screenToWorld2D(clientX, clientY);
-        o.position.x = snap(drag.before.position.x + (world.x - drag.startWorld.x));
-        o.position.y = snap(drag.before.position.y + (world.y - drag.startWorld.y));
-        state.dirty = true; $('#dirtyDot').style.visibility = 'visible';
-      }
-    } else if (drag.kind === 'orbit') {
-      const orbitSpeed = 0.008 * (camera.distance / CAMERA_DISTANCE);
-      camera.yaw = drag.yaw + dx * orbitConfig.sensitivityX * orbitSpeed;
-      camera.pitch = Math.max(-1.45, Math.min(1.45, drag.pitch + dy * orbitConfig.sensitivityY * orbitSpeed));
-    } else if (drag.kind === 'pan') {
-      const cy = Math.cos(camera.yaw), sy = Math.sin(camera.yaw);
-      const scale = (camera.distance / CAMERA_DISTANCE) / (PX_PER_UNIT * state.zoom);
-      camera.targetX = drag.tx - (dx * cy) * scale;
-      camera.targetZ = drag.tz + (dx * sy) * scale;
-      camera.targetY = drag.ty + dy * scale;
-    } else if (drag.kind === 'object') {
-      const o = state.objects.find(x => x.id === state.selectedId);
-      if (!o) return;
-      if (state.tool === 'rotate') o.rotation.y = (drag.before.rotation?.y || 0) + dx * .7;
-      else if (state.tool === 'scale') {
-        const f = Math.max(.1, 1 + dx * .01);
-        o.scale = { x: drag.before.scale.x * f, y: drag.before.scale.y * f, z: drag.before.scale.z * f };
-      } else {
-        const ground = screenToGround(clientX, clientY);
-        if (ground && drag.ground) {
-          o.position.x = snap(drag.before.position.x + (ground.x - drag.ground.x));
-          o.position.z = snap(drag.before.position.z + (ground.z - drag.ground.z));
-        }
-      }
-      state.dirty = true; $('#dirtyDot').style.visibility = 'visible';
-    }
-    markDirty();
-  }
-
-  function endDrag() {
-    if (drag?.kind === 'object') refreshEditor();
-    if (drag?.kind === 'orbit' && drag.moved) window.__forgeSuppressContextMenu = true;
-    drag = null;
-    setCursorClass(null);
-  }
-
-  canvas.addEventListener('mousedown', e => {
-    if (state.mode === '2d') {
-      const hitObject = hit2D(e.clientX, e.clientY);
-      if (hitObject && e.button === 0) {
-        beginDrag('object', e.clientX, e.clientY, hitObject);
-        e.preventDefault();
-      } else if (e.button === 1 || e.button === 2) {
-        beginDrag('pan', e.clientX, e.clientY);
-        e.preventDefault();
-      } else if (e.button === 0) {
-        window.__forgeSelectObject?.(null);
-        markDirty();
-      }
-      return;
-    }
-    const hitObject = hit(e.clientX, e.clientY);
-    if (hitObject && e.button === 0) {
-      beginDrag('object', e.clientX, e.clientY, hitObject);
-      e.preventDefault();
-    } else if (e.button === 0 && e.altKey) {
-      beginDrag('orbit', e.clientX, e.clientY);
-      e.preventDefault();
-    } else if (e.button === 1) {
-      beginDrag('pan', e.clientX, e.clientY);
-      e.preventDefault();
-    } else if (e.button === 2) {
-      beginDrag('orbit', e.clientX, e.clientY);
-      e.preventDefault();
-    } else if (e.button === 0) {
-      window.__forgeSelectObject?.(null);
-      markDirty();
-    }
-  });
-  addEventListener('mousemove', e => {
-    const r = canvas.getBoundingClientRect();
-    if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-      if (state.mode === '2d') update2DCursorPosition(e.clientX, e.clientY);
-      else update3DCursorPosition(e.clientX, e.clientY);
-    }
-    if (state.mode === '2d') {
-      hoverId = drag ? hoverId : hit2D(e.clientX, e.clientY)?.id || null;
-      updateDrag(e.clientX, e.clientY);
-      canvas.style.cursor = hoverId ? 'pointer' : drag?.kind === 'pan' ? 'grabbing' : '';
-      return;
-    }
-    hoverId = drag ? hoverId : hit(e.clientX, e.clientY)?.id || null;
-    updateDrag(e.clientX, e.clientY);
-    canvas.style.cursor = hoverId ? 'pointer' : '';
-  });
-  addEventListener('mouseup', endDrag);
-  canvas.addEventListener('wheel', e => {
-    e.preventDefault();
-    if (state.mode === '2d') {
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      state.view2d.zoom = Math.max(0.35, Math.min(4, state.view2d.zoom * factor));
-      $('#zoomValue').textContent = `${Math.round(state.view2d.zoom * 100)}%`;
-      markDirty();
-      return;
-    }
-    const sensitivity = orbitConfig.sensitivityZ || 1;
-    const factor = e.deltaY < 0 ? Math.pow(0.9, sensitivity) : Math.pow(1.1, sensitivity);
-    camera.distance = Math.max(8, Math.min(200, camera.distance * factor));
-    $('#zoomValue').textContent = Math.round((CAMERA_DISTANCE / camera.distance) * 100) + '%';
-    markDirty();
-  }, { passive: false });
-  canvas.oncontextmenu = e => e.preventDefault();
-
-  // --- Touch controls: 1 finger = orbit (or move a hit object), 2 fingers = pan/pinch-zoom ---
-  canvas.addEventListener('touchstart', e => {
-    if (state.mode === '2d') {
-      if (e.touches.length === 1) {
-        const t = e.touches[0];
-        const hitObject = hit2D(t.clientX, t.clientY);
-        beginDrag(hitObject ? 'object' : 'pan', t.clientX, t.clientY, hitObject);
-      }
-      return;
-    }
-    if (e.touches.length === 1) {
-      const t = e.touches[0];
-      const hitObject = hit(t.clientX, t.clientY);
-      beginDrag(hitObject ? 'object' : 'orbit', t.clientX, t.clientY, hitObject);
-    } else if (e.touches.length === 2) {
-      drag = null;
-      const [a, b] = e.touches;
-      pointers.set('pinchDist', Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY));
-      pointers.set('midX', (a.clientX + b.clientX) / 2);
-      pointers.set('midY', (a.clientY + b.clientY) / 2);
-      pointers.set('tx', camera.targetX); pointers.set('ty', camera.targetY); pointers.set('tz', camera.targetZ);
-    }
-  }, { passive: true });
-  canvas.addEventListener('touchmove', e => {
-    if (state.mode === '2d') {
-      if (e.touches.length === 1 && drag) { updateDrag(e.touches[0].clientX, e.touches[0].clientY); }
-      return;
-    }
-    if (e.touches.length === 1 && drag) { updateDrag(e.touches[0].clientX, e.touches[0].clientY); }
-    else if (e.touches.length === 2) {
-      const [a, b] = e.touches;
-      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      const midX = (a.clientX + b.clientX) / 2, midY = (a.clientY + b.clientY) / 2;
-      const zoomFactor = Math.pow(dist / (pointers.get('pinchDist') || dist), orbitConfig.sensitivityZ || 1);
-      state.zoom = Math.max(.25, Math.min(4, state.zoom * zoomFactor));
-      pointers.set('pinchDist', dist);
-      const cy = Math.cos(camera.yaw), sy = Math.sin(camera.yaw);
-      const scale = 1 / (PX_PER_UNIT * state.zoom);
-      const dx = midX - pointers.get('midX'), dy = midY - pointers.get('midY');
-      camera.targetX -= (dx * cy) * scale; camera.targetZ += (dx * sy) * scale; camera.targetY += dy * scale;
-      pointers.set('midX', midX); pointers.set('midY', midY);
-      $('#zoomValue').textContent = Math.round(state.zoom * 100) + '%';
-      markDirty();
-    }
-  }, { passive: true });
-  ['touchend', 'touchcancel'].forEach(evt => canvas.addEventListener(evt, e => { if (e.touches.length === 0) { endDrag(); pointers.clear(); } }));
-
-  // --- Debug stats + FPS loop (single loop for the whole viewport) ---
-  let frames = 0, last = performance.now(), fps = 60;
-  function renderDebug() {
-    const panel = $('#debugPanel');
-    if (!panel?.classList.contains('show')) return;
-    const o = state.objects.find(x => x.id === state.selectedId);
-    $('#debugStats').innerHTML = `<span>Renderer</span><span>Canvas 2D</span><span>Mode</span><span>${state.mode}</span><span>Objects</span><span>${state.objects.length}</span><span>Selected</span><span>${o?.name || 'none'}</span><span>Orbit</span><span>${orbitConfig.sensitivityX.toFixed(2)} / ${orbitConfig.sensitivityY.toFixed(2)} / ${orbitConfig.sensitivityZ.toFixed(2)}</span><span>Debug Mode</span><span>${interaction._debug ? 'On' : 'Off'}</span><span>Draw calls</span><span>${state.objects.filter(x => x.visible !== false).length + 1}</span><span>FPS</span><span class="stat-good">${fps}</span>`;
-  }
-
-  let lastFrameTime = performance.now();
-  function loop(t) {
-    const dt = Math.min(.05, (t - lastFrameTime) / 1000);
-    lastFrameTime = t;
-    applyArrowPan(dt);
-    frames++;
-    if (t - last >= 1000) { fps = frames; frames = 0; last = t; $('#fpsLabel').textContent = fps + ' FPS'; if ($('#debugPanel')?.classList.contains('show')) markDirty(); }
-    if (dirty) render();
-    requestAnimationFrame(loop);
-  }
-
-  // --- Chrome hooked back up to this single renderer ---
-  $('#debugToggle').onclick = () => { const visible = $('#debugPanel').classList.toggle('show'); interaction.debugMode(visible); markDirty(); };
-  $('#debugClose').onclick = () => $('#debugPanel').classList.remove('show');
-  [...document.querySelectorAll('#viewportModes button')].forEach(b => b.addEventListener('click', () => {
-    resize();
-    $('#cursorPosition').textContent = state.mode === '2d' ? 'X 0  Y 0' : 'X 0  Y 0  Z 0';
-    markDirty();
-  }));
   $('#shadingMode').dataset.mode = 'shaded';
   $('#shadingMode').onclick = e => {
     const modes = ['shaded', 'solid', 'wireframe'];
     const next = modes[(modes.indexOf(e.currentTarget.dataset.mode) + 1) % modes.length];
     e.currentTarget.dataset.mode = next;
     e.currentTarget.textContent = next[0].toUpperCase() + next.slice(1);
-    markDirty();
   };
+
   $('#pauseButton').onclick = () => { if (!state.playing) return; state.paused = !state.paused; $('#pauseButton').classList.toggle('active', state.paused); };
-  ['#gridToggle', '#lightToggle', '#ambientToggle', '#fogToggle', '#gizmoVisibleToggle'].forEach(sel => $(sel)?.addEventListener('click', () => markDirty()));
 
   $('#commandPalette').onclick = () => {
     const p = $('#menuPopover');
@@ -1735,11 +1149,6 @@
       }
     });
   };
-
-  new ResizeObserver(resize).observe(viewport);
-  addEventListener('resize', resize);
-  resize();
-  requestAnimationFrame(loop);
 })();
 
 /* ---------------------------------------------------------------
@@ -1790,6 +1199,12 @@
   $('#menuPopover')?.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
+    // The Command Palette (above) renders its buttons into this same
+    // #menuPopover element and wires its own per-button onclick. Without
+    // this guard, every command-palette click ALSO bubbled into this
+    // delegated menu-bar handler and ran a second time — e.g. "Duplicate"
+    // would duplicate twice, "Delete" would delete the next object too.
+    if (b.dataset.command) return;
     const label = (b.firstChild?.textContent || b.textContent).trim();
     $('#menuPopover').classList.remove('show');
     setTimeout(() => doMenu(label), 0);
