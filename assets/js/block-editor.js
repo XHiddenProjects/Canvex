@@ -11,7 +11,7 @@
   // (right) which are either exec pulses (triangular pins — fire a connected
   // node) or a single computed value (round pin). This mirrors the Trigger /
   // Logic & Math / Component / Text & List / GUI / Game Flow grouping from
-  // the Flowlab-style docs the Behaviors module was built against.
+  // the docs the Behaviors module was built against.
   // ===========================================================================
 
   const N = (key, label, def = 0, extra = {}) => ({ key, label, type: 'number', default: def, ...extra });
@@ -776,8 +776,8 @@
   const customBundles = []; // { name, icon, nodes, wires } captured via "New Bundle"
 
   function insertBundle(bundle) {
-    const baseX = canvasWrap.scrollLeft + 60 + (idSeq % 4) * 26;
-    const baseY = canvasWrap.scrollTop + 40 + (idSeq % 6) * 24;
+    const baseX = -panX / zoom + 60 + (idSeq % 4) * 26;
+    const baseY = -panY / zoom + 40 + (idSeq % 6) * 24;
     const idMap = [];
     bundle.nodes.forEach(spec => {
       const def = defFor(spec.fn);
@@ -813,6 +813,9 @@
 
   const workspace = { nodes: [], connections: [] };
   let idSeq = 0;
+  let zoom = 1;           // canvas zoom level
+  let panX = 0, panY = 0; // canvas pan offset in screen pixels (translate, not native scroll)
+  const ZOOM_MIN = 0.25, ZOOM_MAX = 2.5;
   let selectedNodeId = null;
   let collapsed = new Set(["Triggers", "Logic & Math", "Components","Properties","Text & Lists","GUI","Game Flow","Mobile Device","Multiplayer"]);
   let dragNode = null;      // { id, offsetX, offsetY }
@@ -840,6 +843,13 @@
           <button id="blkClear">Clear</button>
           <span class="fbe-toolbar-sep"></span>
           <button id="blkPlay" class="fbe-play">▶ Test Mode</button>
+          <span class="fbe-toolbar-sep"></span>
+          <div class="fbe-zoom-controls" title="Wheel to zoom in place (like an orbit control) — drag with middle/right mouse button to pan">
+            <button id="fbeZoomOut" title="Zoom out">−</button>
+            <span id="fbeZoomValue">100%</span>
+            <button id="fbeZoomIn" title="Zoom in">+</button>
+            <button id="fbeZoomReset" title="Reset view">⤢ Reset View</button>
+          </div>
           <span class="muted" style="margin-left:auto" id="fbeHint">Drag blocks onto the canvas, then drag from a pin to wire nodes together.</span>
         </div>
         <div class="fbe-canvas-wrap" id="fbeCanvasWrap">
@@ -897,6 +907,82 @@
   const guiHint = mount.querySelector('#fbeGuiHint');
   const statusEl = mount.querySelector('#fbeStatus');
   const playBtn = mount.querySelector('#blkPlay');
+  const zoomValueEl = mount.querySelector('#fbeZoomValue');
+
+  // ===========================================================================
+  // Canvas pan & zoom — a proper orbit-control-style navigation: panning
+  // translates the canvas directly (no native scrollbars, no scroll
+  // container at all) and zooming always dollies in/out around the current
+  // view's own center, exactly like an orbit control's zoom keeps its
+  // target fixed. It never jumps to re-center on the mouse cursor the way
+  // a "zoom toward cursor" (Figma/Photoshop-style) control would.
+  // The canvas itself is moved/scaled with a single CSS transform
+  // (translate then scale); all node/pin math below converts screen
+  // (client) coordinates into this unscaled "canvas-local" space so
+  // node.x/node.y stay resolution-independent.
+  // ===========================================================================
+
+  function applyZoom() {
+    canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+    canvas.style.transformOrigin = '0 0';
+    if (zoomValueEl) zoomValueEl.textContent = `${Math.round(zoom * 100)}%`;
+  }
+  applyZoom();
+
+  function toCanvasPoint(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: (clientX - rect.left) / zoom, y: (clientY - rect.top) / zoom };
+  }
+
+  // Zoom is always anchored on the current center of the view — the same
+  // canvas-local point that's centered before the zoom stays centered
+  // after it. The cursor position is never consulted, so scrolling the
+  // wheel anywhere over the canvas zooms the same way.
+  function setZoom(next) {
+    const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, next));
+    if (clamped === zoom) return;
+    const wrapRect = canvasWrap.getBoundingClientRect();
+    const cx = wrapRect.width / 2, cy = wrapRect.height / 2;
+    // Canvas-local point currently sitting at the viewport's center.
+    const beforeX = (cx - panX) / zoom;
+    const beforeY = (cy - panY) / zoom;
+    zoom = clamped;
+    // Re-pan so that same canvas-local point is still centered.
+    panX = cx - beforeX * zoom;
+    panY = cy - beforeY * zoom;
+    applyZoom();
+  }
+
+  canvasWrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    setZoom(zoom * factor);
+  }, { passive: false });
+
+  let panDrag = null;
+  canvasWrap.addEventListener('pointerdown', e => {
+    if (e.button !== 1 && e.button !== 2) return; // middle or right mouse button only
+    e.preventDefault();
+    panDrag = { x: e.clientX, y: e.clientY, panX, panY };
+    canvasWrap.classList.add('is-panning');
+  });
+  window.addEventListener('pointermove', e => {
+    if (!panDrag) return;
+    panX = panDrag.panX + (e.clientX - panDrag.x);
+    panY = panDrag.panY + (e.clientY - panDrag.y);
+    applyZoom();
+  });
+  window.addEventListener('pointerup', () => { panDrag = null; canvasWrap.classList.remove('is-panning'); });
+  canvasWrap.addEventListener('contextmenu', e => e.preventDefault()); // right-click is reserved for panning here
+
+  mount.querySelector('#fbeZoomIn').addEventListener('click', () => setZoom(zoom * 1.25));
+  mount.querySelector('#fbeZoomOut').addEventListener('click', () => setZoom(zoom / 1.25));
+  mount.querySelector('#fbeZoomReset').addEventListener('click', () => {
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+    applyZoom();
+  });
 
   // ===========================================================================
   // Sidebar — collapsible categories with icons + styled list rows
@@ -977,9 +1063,9 @@
       item.addEventListener('click', () => insertBundle(bundle));
     });
     const newBtn = catalogEl.querySelector('[data-bundle-action="new"]');
-    if (newBtn) newBtn.addEventListener('click', () => {
+    if (newBtn) newBtn.addEventListener('click', async () => {
       if (!workspace.nodes.length) { toast('Add some blocks to the canvas first, then save them as a bundle'); return; }
-      const name = window.prompt('Name this bundle:', 'My Bundle');
+      const name = await window.forgePrompt('Name this bundle:', 'My Bundle', { title: 'New Bundle' });
       if (!name) return;
       const bundle = captureBundleFromCanvas(name.trim() || 'My Bundle');
       if (bundle) { customBundles.push(bundle); toast(`Saved "${bundle.name}" as a Behavior Bundle`); renderSidebar(mount.querySelector('#fbeSearch').value); }
@@ -1010,8 +1096,8 @@
   }
 
   function addNodeNearView(fn) {
-    const x = canvasWrap.scrollLeft + 60 + (idSeq % 4) * 26;
-    const y = canvasWrap.scrollTop + 40 + (idSeq % 6) * 24;
+    const x = -panX / zoom + 60 + (idSeq % 4) * 26;
+    const y = -panY / zoom + 40 + (idSeq % 6) * 24;
     addNode(fn, x, y);
   }
 
@@ -1044,8 +1130,8 @@
     return workspace.connections.length !== before;
   }
 
-  mount.querySelector('#blkClear').addEventListener('click', () => {
-    if (workspace.nodes.length && !window.confirm('Clear all blocks?')) return;
+  mount.querySelector('#blkClear').addEventListener('click', async () => {
+    if (workspace.nodes.length && !(await window.forgeConfirm('Clear all blocks?', { danger: true, confirmText: 'Clear' }))) return;
     workspace.nodes = []; workspace.connections = []; selectedNodeId = null;
     renderNodes(); redrawWires(); updatePreviewCode();
   });
@@ -1071,8 +1157,8 @@
     e.preventDefault(); canvas.classList.remove('drag-over');
     try {
       const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-      const rect = canvas.getBoundingClientRect();
-      addNode(data.fn, e.clientX - rect.left, e.clientY - rect.top);
+      const pt = toCanvasPoint(e.clientX, e.clientY);
+      addNode(data.fn, pt.x, pt.y);
     } catch { /* ignore non-block drops */ }
   });
 
@@ -1153,6 +1239,7 @@
 
   // Node selection / drag / literal edits / delete — delegated on nodesLayer
   nodesLayer.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return; // left-click only; middle/right are reserved for canvas panning
     const closeBtn = e.target.closest('[data-close]');
     if (closeBtn) { deleteNode(closeBtn.dataset.close); return; }
     if (e.target.closest('.fbe-pin')) return; // handled by pin listeners below
@@ -1163,8 +1250,8 @@
     nodesLayer.querySelectorAll('.fbe-node').forEach(n => n.classList.toggle('is-selected', n.dataset.id === selectedNodeId));
     if (!head) return;
     const node = nodeById(selectedNodeId);
-    const rect = canvas.getBoundingClientRect();
-    dragNode = { id: node.id, offsetX: e.clientX - rect.left - node.x, offsetY: e.clientY - rect.top - node.y };
+    const pt = toCanvasPoint(e.clientX, e.clientY);
+    dragNode = { id: node.id, offsetX: pt.x - node.x, offsetY: pt.y - node.y };
     e.preventDefault();
   });
 
@@ -1196,9 +1283,9 @@
     if (!dragNode) return;
     const node = nodeById(dragNode.id);
     if (!node) return;
-    const rect = canvas.getBoundingClientRect();
-    node.x = Math.max(0, e.clientX - rect.left - dragNode.offsetX);
-    node.y = Math.max(0, e.clientY - rect.top - dragNode.offsetY);
+    const pt = toCanvasPoint(e.clientX, e.clientY);
+    node.x = Math.max(0, pt.x - dragNode.offsetX);
+    node.y = Math.max(0, pt.y - dragNode.offsetY);
     const el = nodesLayer.querySelector(`.fbe-node[data-id="${node.id}"]`);
     if (el) { el.style.left = node.x + 'px'; el.style.top = node.y + 'px'; }
     redrawWires();
@@ -1216,7 +1303,9 @@
     const el = pinEl(nodeId, io, key);
     if (!el) return null;
     const er = el.getBoundingClientRect(), cr = canvas.getBoundingClientRect();
-    return { x: er.left - cr.left + er.width / 2 + canvas.scrollLeft, y: er.top - cr.top + er.height / 2 + canvas.scrollTop };
+    // er/cr are both post-zoom screen rects, so divide the on-screen delta by
+    // zoom to land back in the same unscaled canvas-local space as node.x/y.
+    return { x: (er.left - cr.left + er.width / 2) / zoom, y: (er.top - cr.top + er.height / 2) / zoom };
   }
 
   function bezier(p1, p2) {
@@ -1269,9 +1358,9 @@
 
   window.addEventListener('pointermove', e => {
     if (!dragWire) return;
-    const rect = canvas.getBoundingClientRect();
-    dragWire.x = e.clientX - rect.left + canvas.scrollLeft;
-    dragWire.y = e.clientY - rect.top + canvas.scrollTop;
+    const pt = toCanvasPoint(e.clientX, e.clientY);
+    dragWire.x = pt.x;
+    dragWire.y = pt.y;
     redrawWires();
   });
 
@@ -1617,15 +1706,54 @@
     if (!workspace.nodes.length) { toast('Add at least one block first'); return; }
     const fnName = mount.querySelector('#blkFnName').value.trim() || 'myFunction';
     try {
-      await api(`/api/games/${encodeURIComponent(state.slug)}/assets`, {
+      const { asset } = await api(`/api/games/${encodeURIComponent(state.slug)}/assets`, {
         method: 'POST',
-        body: JSON.stringify({ name: fnName, category: 'script', code: generateCode() })
+        body: JSON.stringify({
+          name: fnName, category: 'script', code: generateCode(),
+          // The generated JS can't be reverse-engineered back into blocks,
+          // so the raw graph is saved alongside it — this is what lets
+          // re-opening a script asset from the Assets tab load the actual
+          // visual blocks back in instead of just showing dead text (see
+          // window.__forgeBlockEditorLoad below).
+          graph: {
+            nodes: workspace.nodes.map(n => ({ id: n.id, fn: n.fn, x: n.x, y: n.y, inputValues: n.inputValues })),
+            connections: workspace.connections
+          }
+        })
       });
-      toast(`Saved function "${fnName}" as a script asset`);
-      log('info', `Block editor: combined ${workspace.nodes.length} node(s) into "${fnName}"`);
+      toast(asset?.overwritten ? `Saved — overwrote existing script "${fnName}"` : `Saved function "${fnName}" as a script asset`);
+      log('info', `Block editor: combined ${workspace.nodes.length} node(s) into "${fnName}"${asset?.overwritten ? ' (overwrote previous version)' : ''}`);
       window.__forgeLoadAssets?.();
     } catch (error) { toast(error.message); }
   });
+
+  // Load an existing script asset's block graph back onto the canvas —
+  // used by the Assets tab's right-click "Edit in Blocks…" (see editor.js).
+  // Only works for scripts that were actually saved from this Block
+  // Editor (i.e. carry a `graph`, see #blkCombine above); anything else
+  // (hand-written or otherwise-sourced script assets) has no block
+  // representation to recover, so the canvas is just cleared with an
+  // explanation instead of guessing.
+  function loadScriptAsset(asset) {
+    if (!asset.graph || !Array.isArray(asset.graph.nodes)) {
+      toast(`"${asset.name}" wasn't created in the Block Editor, so it has no blocks to load — only scripts saved from here can be reopened as blocks.`);
+      return;
+    }
+    workspace.nodes = asset.graph.nodes
+      .filter(n => defFor(n.fn))
+      .map(n => ({ id: n.id, fn: n.fn, x: n.x, y: n.y, inputValues: { ...n.inputValues }, outputsLive: {} }));
+    const liveIds = new Set(workspace.nodes.map(n => n.id));
+    workspace.connections = (asset.graph.connections || []).filter(c => liveIds.has(c.from?.node) && liveIds.has(c.to?.node));
+    // Keep handing out fresh ids above whatever the loaded graph already used.
+    const maxSeq = workspace.nodes.reduce((max, n) => Math.max(max, parseInt(String(n.id).replace(/^n/, ''), 10) || 0), 0);
+    idSeq = Math.max(idSeq, maxSeq + 1);
+    selectedNodeId = null;
+    const nameField = mount.querySelector('#blkFnName');
+    if (nameField) nameField.value = asset.name;
+    renderNodes(); redrawWires(); updatePreviewCode();
+    toast(`Loaded "${asset.name}" for editing`);
+  }
+  window.__forgeBlockEditorLoad = loadScriptAsset;
 
   // ===========================================================================
   // Test / Game Mode — actually runs the graph in the browser: trigger blocks
@@ -1693,6 +1821,7 @@
     const emit = makeEmit(node, true, depth);
     try { def.sim.run(node, args, emit, testCtx, pulse, execKey); }
     catch (err) { outputsFor(def, node).forEach(o => emit(o.key, `Error: ${err.message}`)); }
+    window.__forgeHooks?.emit('onNodeRun', node, execKey);
   }
 
   function buildCtx() {
@@ -1729,6 +1858,7 @@
     mount.querySelectorAll('.fbe-bpanel').forEach(p => p.classList.toggle('active', p.dataset.bpanel === 'test'));
     nodesLayer.classList.add('is-live');
     buildGuiOverlay();
+    window.__forgeHooks?.emit('onTestStart', testCtx);
 
     workspace.nodes.forEach(node => {
       const def = defFor(node.fn);
@@ -1773,6 +1903,7 @@
     statusEl.textContent = 'Stopped. Press ▶ Test Mode to run the graph again.';
     nodesLayer.classList.remove('is-live');
     teardownGuiOverlay();
+    window.__forgeHooks?.emit('onTestStop');
   }
 
   playBtn.addEventListener('click', () => (testRunning ? stopTest() : startTest()));

@@ -189,13 +189,13 @@
   }
 
   async function confirmDeleteGame(game) {
-    const ok = window.confirm(`Delete "${game.name}"? This removes its scenes, scripts, and assets permanently. This can't be undone.`);
+    const ok = await window.forgeConfirm(`Delete "${game.name}"? This removes its scenes, scripts, and assets permanently. This can't be undone.`, { title: 'Delete Game', danger: true, confirmText: 'Delete' });
     if (!ok) return;
     try {
       await api(`/api/games/${encodeURIComponent(game.slug)}`, { method: "DELETE" });
       await Promise.all([loadGames(), loadAssets()]);
     } catch (error) {
-      window.alert(error.message || "Couldn't delete this game.");
+      window.forgeAlert(error.message || "Couldn't delete this game.", { title: 'Error' });
     }
   }
 

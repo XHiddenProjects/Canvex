@@ -1,0 +1,438 @@
+/* =============================================================================
+   FORGE ENGINE — FORM CONTROLS
+   A single, drop-in stylesheet for great-looking native form controls:
+   text/number/date-ish inputs, range sliders (horizontal + vertical),
+   checkboxes, radios, a toggle switch, selects/dropdowns, textareas, and
+   file inputs. Include this after a page's own stylesheet, e.g.:
+
+     <link rel="stylesheet" href="/assets/css/editor.css">
+     <link rel="stylesheet" href="/assets/css/forms.css">
+
+   Every color here is a fallback chain — it reads whatever theme
+   variables the page already defines (--accent/--primary, --line/
+   --border, --panel2/--surface2, --text, --muted) and only falls back
+   to the hardcoded defaults below if none of those exist. That means
+   this file can be dropped into editor.html, index.html, play.html, or
+   any future page without needing to rename anything first.
+   ========================================================================== */
+
+:root {
+  --fc-accent: var(--accent, var(--primary, #e4813a));
+  --fc-accent-soft: color-mix(in srgb, var(--fc-accent) 22%, transparent);
+  --fc-accent-text: var(--accent2, #fff);
+
+  --fc-bg: var(--panel2, var(--surface2, var(--surface-2, #1a1d22)));
+  --fc-bg-raised: var(--panel3, var(--surface3, var(--surface-3, #22262c)));
+  --fc-track-bg: var(--panel, var(--surface, #14161a));
+
+  --fc-border: var(--line, var(--border, #3a3f47));
+  --fc-border-strong: var(--line2, var(--border-strong, #4d5460));
+  --fc-border-focus: var(--fc-accent);
+
+  --fc-text: var(--text, #e5e7eb);
+  --fc-muted: var(--muted, #8d939d);
+  --fc-placeholder: var(--fc-muted);
+  --fc-danger: var(--danger, #d75f64);
+
+  --fc-radius: var(--radius, 6px);
+  --fc-radius-sm: 4px;
+  --fc-radius-pill: 999px;
+
+  --fc-height: 32px;
+  --fc-height-sm: 26px;
+  --fc-font: 12.5px;
+
+  --fc-focus-ring: 0 0 0 3px var(--fc-accent-soft);
+  --fc-transition: 120ms ease;
+}
+
+/* -----------------------------------------------------------------------
+   Shared reset — every control uses the same font, box model, and a
+   consistent focus treatment instead of each browser's inconsistent
+   native default outline.
+   -------------------------------------------------------------------- */
+
+.fc,
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="url"],
+input[type="tel"],
+input[type="password"],
+input[type="number"],
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="week"],
+input:not([type]),
+select,
+textarea {
+  font: inherit;
+  font-size: var(--fc-font);
+  color: var(--fc-text);
+  background: var(--fc-bg);
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius);
+  padding: 0 10px;
+  height: var(--fc-height);
+  transition: border-color var(--fc-transition), box-shadow var(--fc-transition), background-color var(--fc-transition);
+}
+textarea { height: auto; padding: 8px 10px; line-height: 1.5; resize: vertical; min-height: 64px; }
+
+input[type="text"]:hover,
+input[type="search"]:hover,
+input[type="email"]:hover,
+input[type="url"]:hover,
+input[type="tel"]:hover,
+input[type="password"]:hover,
+input[type="number"]:hover,
+input[type="date"]:hover,
+input[type="time"]:hover,
+input[type="datetime-local"]:hover,
+input[type="month"]:hover,
+input[type="week"]:hover,
+input:not([type]):hover,
+select:hover,
+textarea:hover {
+  border-color: var(--fc-border-strong);
+}
+
+input[type="text"]:focus,
+input[type="search"]:focus,
+input[type="email"]:focus,
+input[type="url"]:focus,
+input[type="tel"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+input[type="date"]:focus,
+input[type="time"]:focus,
+input[type="datetime-local"]:focus,
+input[type="month"]:focus,
+input[type="week"]:focus,
+input:not([type]):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--fc-border-focus);
+  box-shadow: var(--fc-focus-ring);
+}
+
+input::placeholder,
+textarea::placeholder { color: var(--fc-placeholder); opacity: 1; }
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  background: var(--fc-track-bg);
+}
+
+input.invalid,
+select.invalid,
+textarea.invalid,
+input:invalid:not(:placeholder-shown) {
+  border-color: var(--fc-danger);
+}
+input.invalid:focus,
+select.invalid:focus,
+textarea.invalid:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fc-danger) 24%, transparent);
+}
+
+/* Size modifiers — add class="fc-sm" for a compact row (toolbars, inspectors) */
+.fc-sm,
+input.fc-sm,
+select.fc-sm {
+  height: var(--fc-height-sm);
+  padding: 0 8px;
+  font-size: 11.5px;
+  border-radius: var(--fc-radius-sm);
+}
+
+/* -----------------------------------------------------------------------
+   Number input — keep the native step buttons but make them feel
+   intentional instead of the cramped default: full-height, only
+   revealed on hover/focus so plain values stay uncluttered.
+   -------------------------------------------------------------------- */
+
+input[type="number"] {
+  padding-right: 6px;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  appearance: auto;
+  opacity: 0;
+  height: 100%;
+  margin: 0;
+  transition: opacity var(--fc-transition);
+}
+input[type="number"]:hover::-webkit-inner-spin-button,
+input[type="number"]:hover::-webkit-outer-spin-button,
+input[type="number"]:focus::-webkit-inner-spin-button,
+input[type="number"]:focus::-webkit-outer-spin-button {
+  opacity: .85;
+}
+
+/* A no-spinner variant for tight layouts (mixer strips, coordinate rows) */
+input[type="number"].fc-plain::-webkit-inner-spin-button,
+input[type="number"].fc-plain::-webkit-outer-spin-button { opacity: 0 !important; }
+input[type="number"].fc-plain { -moz-appearance: textfield; }
+
+/* -----------------------------------------------------------------------
+   Range slider — horizontal (the common case) and vertical (mixer-style
+   faders, via the existing writing-mode:vertical-lr convention). The
+   track fill is static by default; set the --fc-range-progress custom
+   property from JS (0–100) on an element with class "fc-range-fill" to
+   get a filled/unfilled track like most DAW faders — entirely optional.
+   -------------------------------------------------------------------- */
+
+input[type="range"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: var(--fc-height);
+  background: transparent;
+  cursor: pointer;
+}
+
+/* Track */
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: var(--fc-radius-pill);
+  background: var(--fc-track-bg);
+  border: 1px solid var(--fc-border);
+}
+input[type="range"]::-moz-range-track {
+  height: 5px;
+  border-radius: var(--fc-radius-pill);
+  background: var(--fc-track-bg);
+  border: 1px solid var(--fc-border);
+}
+
+/* Thumb */
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--fc-accent);
+  border: 2px solid var(--fc-accent-text);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .4);
+  transition: transform var(--fc-transition), box-shadow var(--fc-transition);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--fc-accent);
+  border: 2px solid var(--fc-accent-text);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .4);
+  transition: transform var(--fc-transition), box-shadow var(--fc-transition);
+}
+input[type="range"]:hover::-webkit-slider-thumb,
+input[type="range"]:hover::-moz-range-thumb { transform: scale(1.12); }
+input[type="range"]:focus-visible::-webkit-slider-thumb,
+input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px var(--fc-accent-soft); }
+input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
+input[type="range"]:disabled::-webkit-slider-thumb { background: var(--fc-muted); }
+
+/* Filled-track opt-in (set style="--fc-range-progress: 64%" from JS) */
+input[type="range"].fc-range-fill {
+  --fc-range-progress: 50%;
+  background: linear-gradient(90deg, var(--fc-accent) 0 var(--fc-range-progress), transparent var(--fc-range-progress) 100%);
+  border-radius: var(--fc-radius-pill);
+}
+input[type="range"].fc-range-fill::-webkit-slider-runnable-track { background: transparent; border-color: transparent; }
+
+/* Vertical fader — matches the writing-mode:vertical-lr pattern already
+   used for mixer channel strips throughout the editors. */
+input[type="range"].fc-range-vertical,
+input[type="range"][data-vertical] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 5px;
+  height: 100px;
+  padding: 0;
+}
+
+/* -----------------------------------------------------------------------
+   Checkbox & radio — fully custom appearance so both render identically
+   across browsers instead of relying on the OS-native widgets.
+   -------------------------------------------------------------------- */
+
+input[type="checkbox"],
+input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin: 0;
+  background: var(--fc-bg);
+  border: 1px solid var(--fc-border-strong);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition: background-color var(--fc-transition), border-color var(--fc-transition);
+}
+input[type="checkbox"] { border-radius: 4px; }
+input[type="radio"] { border-radius: 50%; }
+
+input[type="checkbox"]::before,
+input[type="radio"]::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  transform: scale(0);
+  transition: transform 100ms ease;
+}
+input[type="checkbox"]::before {
+  background: var(--fc-accent-text);
+  clip-path: polygon(14% 44%, 0 63%, 39% 100%, 100% 16%, 85% 0%, 38% 70%);
+}
+input[type="radio"]::before {
+  border-radius: 50%;
+  background: var(--fc-accent-text);
+}
+
+input[type="checkbox"]:checked,
+input[type="radio"]:checked {
+  background: var(--fc-accent);
+  border-color: var(--fc-accent);
+}
+input[type="checkbox"]:checked::before,
+input[type="radio"]:checked::before { transform: scale(1); }
+
+input[type="checkbox"]:hover,
+input[type="radio"]:hover { border-color: var(--fc-accent); }
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible { outline: none; box-shadow: var(--fc-focus-ring); }
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled { opacity: .4; cursor: not-allowed; }
+
+/* -----------------------------------------------------------------------
+   Toggle switch — an opt-in component for on/off settings. Markup:
+     <label class="fc-switch">
+       <input type="checkbox">
+       <span class="fc-switch-track"><span class="fc-switch-thumb"></span></span>
+     </label>
+   -------------------------------------------------------------------- */
+
+.fc-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.fc-switch input[type="checkbox"] {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0; pointer-events: none;
+}
+.fc-switch-track {
+  width: 34px;
+  height: 20px;
+  border-radius: var(--fc-radius-pill);
+  background: var(--fc-track-bg);
+  border: 1px solid var(--fc-border-strong);
+  position: relative;
+  transition: background-color var(--fc-transition), border-color var(--fc-transition);
+  flex: none;
+}
+.fc-switch-thumb {
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--fc-muted);
+  transition: transform var(--fc-transition), background-color var(--fc-transition);
+}
+.fc-switch input:checked + .fc-switch-track { background: var(--fc-accent-soft); border-color: var(--fc-accent); }
+.fc-switch input:checked + .fc-switch-track .fc-switch-thumb { transform: translateX(14px); background: var(--fc-accent); }
+.fc-switch input:focus-visible + .fc-switch-track { box-shadow: var(--fc-focus-ring); }
+.fc-switch input:disabled + .fc-switch-track { opacity: .4; cursor: not-allowed; }
+
+/* -----------------------------------------------------------------------
+   Select / dropdown — custom chevron, consistent sizing. Note: native
+   <select> popup option lists can't be fully restyled in CSS across
+   browsers (that needs a JS-built custom dropdown) — this covers the
+   closed control, which is what's visible almost all the time.
+   -------------------------------------------------------------------- */
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238d939d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+select:hover {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23e5e7eb' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+select:disabled { background-image: none; }
+select option { background: var(--fc-bg-raised); color: var(--fc-text); }
+select[multiple] { padding: 4px; background-image: none; height: auto; }
+select[multiple] option { padding: 4px 8px; border-radius: var(--fc-radius-sm); }
+
+/* -----------------------------------------------------------------------
+   File input — style the pickable button, leave the filename readout
+   in the browser's native style (its content isn't stylable anyway).
+   -------------------------------------------------------------------- */
+
+input[type="file"] {
+  font-size: var(--fc-font);
+  color: var(--fc-muted);
+  height: auto;
+}
+input[type="file"]::file-selector-button {
+  font: inherit;
+  font-size: var(--fc-font);
+  color: var(--fc-text);
+  background: var(--fc-bg-raised);
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-sm);
+  padding: 6px 12px;
+  margin-right: 10px;
+  cursor: pointer;
+  transition: background-color var(--fc-transition), border-color var(--fc-transition);
+}
+input[type="file"]::file-selector-button:hover {
+  background: var(--fc-bg);
+  border-color: var(--fc-border-strong);
+}
+
+/* -----------------------------------------------------------------------
+   Color input — trim the native padding so the swatch fills the control.
+   -------------------------------------------------------------------- */
+
+input[type="color"] {
+  width: 34px;
+  height: var(--fc-height);
+  padding: 3px;
+  cursor: pointer;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
+input[type="color"]::-moz-color-swatch { border: none; border-radius: 3px; }
+
+/* -----------------------------------------------------------------------
+   Layout helpers — small optional utilities for laying out labeled
+   controls consistently; entirely optional, nothing above requires them.
+   -------------------------------------------------------------------- */
+
+.fc-field { display: flex; flex-direction: column; gap: 5px; }
+.fc-field-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--fc-muted);
+}
+.fc-row { display: flex; align-items: center; gap: 8px; }
+.fc-checkbox-row { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+
+
+.switch input[type="checkbox"]{
+  display: none;
+}

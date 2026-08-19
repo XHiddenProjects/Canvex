@@ -43,6 +43,52 @@
   }
 
   // ---------------------------------------------------------------
+  // Attaching an asset to an object — shared by every place that can do
+  // this (the Add Component picker, the Assets panel's double-click
+  // preview, and the block editor's asset picker) so they all behave the
+  // same way instead of some paths silently skipping the visual swap.
+  // Image assets drive `spriteUrl` (a texture); model (.obj) assets drive
+  // `modelUrl` (real loaded geometry, see forge-viewport.js) — keeping
+  // those as two separate fields instead of overloading one lets the
+  // viewport tell unambiguously which kind of asset is attached, rather
+  // than guessing from the URL (asset URLs are just `/assets/<id>/file`,
+  // with no file extension to sniff).
+  // ---------------------------------------------------------------
+  function attachAssetToObject(o, asset) {
+    o.attachments ||= [];
+    if (o.attachments.some(a => a.assetId === asset.id)) { toast(`${asset.name} is already attached`); return false; }
+    o.attachments.push({ id: `att-${Date.now().toString(36)}`, assetId: asset.id, name: asset.name, category: asset.category, url: asset.url || '' });
+    if (asset.category === 'image' && asset.url) { o.spriteUrl = asset.url; }
+    else if (asset.category === 'model' && asset.url) {
+      // A "model" asset can be either the .obj geometry or its companion
+      // .mtl (the model editor saves both, see model-editor.js) — they
+      // used to both blindly overwrite `modelUrl`, so attaching the .mtl
+      // *after* the .obj silently pointed the object's geometry at the
+      // .mtl file instead and broke it. Route each to its own field based
+      // on its actual extension instead of assuming category === kind.
+      if (/\.mtl$/i.test(asset.name)) {
+        o.mtlUrl = asset.url;
+      } else {
+        o.modelUrl = asset.url;
+        // If a companion .mtl is already in the project (same base name),
+        // link it too so the viewport can load real per-primitive colors
+        // instead of a flat placeholder gray — see forge-viewport.js.
+        const base = asset.name.replace(/\.obj$/i, '');
+        const mtl = (state.assets || []).find(a => a.category === 'model' && a.name.toLowerCase() === `${base}.mtl`.toLowerCase());
+        if (mtl?.url) o.mtlUrl = mtl.url;
+      }
+    }
+    state.dirty = true;
+    $('#dirtyDot').style.visibility = 'visible';
+    return true;
+  }
+  // Other IIFEs in this file (the asset-preview modal, the Attach picker,
+  // the block editor, etc.) are separate closures and can't see this
+  // function directly — expose it on window so every attach path shares
+  // the exact same logic instead of drifting apart.
+  window.__forgeAttachAsset = attachAssetToObject;
+
+  // ---------------------------------------------------------------
   // Loading the real game + scene from the server
   // ---------------------------------------------------------------
 
@@ -128,9 +174,13 @@
       layer: o.layer || 'Default',
       // Scripts/assets attached via the context menu or Add Component.
       attachments: Array.isArray(o.attachments) ? o.attachments : [],
-      // When an image/pixel-art/model asset is attached, the object's
-      // viewport representation switches to that asset (see openAttachPicker).
-      spriteUrl: o.spriteUrl || null
+      // When an image asset is attached, the object's viewport
+      // representation switches to that image (see attachAssetToObject).
+      spriteUrl: o.spriteUrl || null,
+      // When a model (.obj) asset is attached, the object's viewport
+      // representation switches to that loaded model (see attachAssetToObject
+      // and forge-viewport.js's OBJ-loading code).
+      modelUrl: o.modelUrl || null
     };
   }
 
@@ -170,7 +220,7 @@
 
   $('#addScene')?.addEventListener('click', async () => {
     if (!state.slug) return;
-    const name = window.prompt('New scene / level name', `Level ${state.scenes.length + 1}`);
+    const name = await window.forgePrompt('New scene / level name', `Level ${state.scenes.length + 1}`, { title: 'New Scene' });
     if (!name) return;
     try {
       const { scene } = await api(`/api/games/${encodeURIComponent(state.slug)}/scenes`, { method: 'POST', body: JSON.stringify({ name }) });
@@ -186,7 +236,7 @@
 
   $('#deleteScene')?.addEventListener('click', async () => {
     if (!state.slug || state.scenes.length <= 1) { toast('A game must keep at least one scene'); return; }
-    if (!window.confirm(`Delete scene "${state.sceneName}"? This can't be undone.`)) return;
+    if (!(await window.forgeConfirm(`Delete scene "${state.sceneName}"? This can't be undone.`, { title: 'Delete Scene', danger: true, confirmText: 'Delete' }))) return;
     try {
       await api(`/api/games/${encodeURIComponent(state.slug)}/scenes/${encodeURIComponent(state.sceneId)}`, { method: 'DELETE' });
       state.scenes = state.scenes.filter(s => s.id !== state.sceneId);
@@ -223,6 +273,7 @@
     window.__forgeRenderKeyframes?.();
     const o = state.objects.find(x => x.id === id);
     if (o) toast(`${o.name} selected`);
+    window.__forgeHooks?.emit('onObjectSelect', o || null);
   }
 
   window.__forgeSelectObject = selectObject;
@@ -240,6 +291,11 @@
     if (vectors[0]) setVec(vectors[0], o.position);
     if (vectors[1]) setVec(vectors[1], o.rotation, '°');
     if (vectors[2]) setVec(vectors[2], o.scale);
+    // Z never does anything in the flat 2D editor (objects are always
+    // pinned to z=0 there — see syncVisual), so showing a Z position field
+    // that's permanently 0 was just confusing. Hide it in 2D; 3D still
+    // needs it since Z is real depth there.
+    if (vectors[0]) vectors[0].classList.toggle('vector-2axis', state.mode === '2d');
     if ($('#objectEnabled')) $('#objectEnabled').checked = o.enabled !== false;
     if ($('#objectTag')) $('#objectTag').value = o.tag || 'Untagged';
     if ($('#objectLayer')) $('#objectLayer').value = o.layer || 'Default';
@@ -262,9 +318,16 @@
           <button class="asset-remove" data-remove-attachment="${a.id}" title="Remove">×</button>
         </div>`).join('')}</div>`;
     box.querySelectorAll('[data-remove-attachment]').forEach(btn => btn.addEventListener('click', () => {
+      const removed = (o.attachments || []).find(a => a.id === btn.dataset.removeAttachment);
       o.attachments = (o.attachments || []).filter(a => a.id !== btn.dataset.removeAttachment);
+      // If the removed attachment was the one driving the object's visual
+      // (an image texture or a loaded model), clear that too — otherwise
+      // the object keeps showing an asset that's no longer listed as attached.
+      if (removed?.category === 'image' && removed.url && o.spriteUrl === removed.url) o.spriteUrl = null;
+      if (removed?.category === 'model' && removed.url && o.modelUrl === removed.url) o.modelUrl = null;
       markDirty();
       renderAttachments(o);
+      window.forgeRedraw3D?.();
       toast('Removed from object');
     }));
   }
@@ -343,11 +406,13 @@
   $('#addObject').onclick = () => {
     const id = `object-${Date.now().toString(36)}`;
     const n = state.objects.length + 1;
-    state.objects.push(withDefaults({ id, name: `Game Object ${n}`, type: 'mesh' }));
+    const obj = withDefaults({ id, name: `Game Object ${n}`, type: 'mesh' });
+    state.objects.push(obj);
     markDirty();
     selectObject(id);
     renderTree($('#sceneSearch').value);
     log('info', `Added "Game Object ${n}" to the scene`);
+    window.__forgeHooks?.emit('onObjectAdd', obj);
   };
 
   $('#deleteObject').onclick = () => {
@@ -361,6 +426,7 @@
     renderViewportObjects();
     toast(`${o.name} deleted`);
     log('info', `Deleted "${o.name}"`);
+    window.__forgeHooks?.emit('onObjectDelete', o);
   };
 
   $('#addComponent').onclick = () => {
@@ -383,6 +449,7 @@
       markDirty(false);
       toast('Scene saved');
       log('info', 'Scene saved');
+      window.__forgeHooks?.emit('onSceneSave', { id: state.sceneId, name: state.sceneName, objects: state.objects });
     } catch (error) {
       toast(error.message);
       log('error', `Save failed: ${error.message}`);
@@ -395,12 +462,50 @@
   });
 
   // ---------------------------------------------------------------
+  // Autosave + leave-without-saving guard. Previously the only way work
+  // got persisted was an explicit Ctrl+S / "Save Scene" click (or leaving
+  // via the scene switcher, which autosaves on its way out) — closing the
+  // tab, refreshing, or navigating away any other way silently discarded
+  // whatever hadn't been manually saved, including newly-added objects and
+  // their attachments. This adds a periodic autosave while there are
+  // unsaved changes, plus a native "are you sure you want to leave?"
+  // prompt as a last line of defense for whatever hasn't autosaved yet.
+  // ---------------------------------------------------------------
+  const AUTOSAVE_INTERVAL_MS = 20000;
+  let autosaveInFlight = false;
+  setInterval(async () => {
+    if (!state.slug || !state.dirty || autosaveInFlight) return;
+    autosaveInFlight = true;
+    try { await saveScene(); } finally { autosaveInFlight = false; }
+  }, AUTOSAVE_INTERVAL_MS);
+
+  addEventListener('beforeunload', e => {
+    if (!state.dirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
+  // ---------------------------------------------------------------
   // Assets tab: real per-game assets stored on disk with metadata,
   // organized by category, backed by /api/games/:slug/assets
   // ---------------------------------------------------------------
 
   const CATEGORY_GLYPH = { image: '◆', audio: '♪', model: '▰', shader: '❖', script: 'JS', font: 'Aa', other: '◫' };
   window.__forgeCategoryGlyph = CATEGORY_GLYPH;
+  // Script/shader assets are stored under just their display name (e.g.
+  // "myFunction", no ".js") since that's what the block/shader editors
+  // pass in — the real extension only exists on the server's on-disk
+  // fileName. Downloading with that bare name left browsers to guess a
+  // type from the response's Content-Type, which used to be a generic
+  // "text/plain" for scripts and got saved as ".txt". Appending the right
+  // extension here (when the display name doesn't already have one) means
+  // the browser doesn't have to guess.
+  const ASSET_DOWNLOAD_EXT = { script: '.js', shader: '.glsl' };
+  function assetDownloadName(a) {
+    const wantExt = ASSET_DOWNLOAD_EXT[a.category];
+    return wantExt && !/\.[a-z0-9]+$/i.test(a.name) ? `${a.name}${wantExt}` : a.name;
+  }
+  window.__forgeAssetDownloadName = assetDownloadName;
   state.assets = [];
   state.assetCategory = '';
 
@@ -435,6 +540,34 @@
         <button class="asset-delete" data-delete="${a.id}" title="Delete asset">×</button>
         <div class="asset-preview">${preview}</div><span>${escapeHtml(a.name)}</span></div>`;
     }).join('');
+    renderModelThumbnails(list);
+  }
+
+  // Model assets (.obj / .mtl) get a real rendered-preview thumbnail
+  // instead of the flat glyph — same as images already get above — using
+  // model-thumbnail.js's offscreen renderer. This runs after the grid's
+  // synchronous HTML is in place (thumbnails resolve async) and swaps each
+  // card's preview in place once ready. A .obj and its companion .mtl (see
+  // resolveModelUrls's pairing logic in forge-viewport.js) render the same
+  // snapshot, so both cards visibly show the model, not just the .obj one.
+  function renderModelThumbnails(list) {
+    if (!window.__forgeModelThumbnail) return;
+    const models = list.filter(a => a.category === 'model');
+    const objs = models.filter(a => /\.obj$/i.test(a.name));
+    models.forEach(a => {
+      const isObj = /\.obj$/i.test(a.name);
+      const isMtl = /\.mtl$/i.test(a.name);
+      if (!isObj && !isMtl) return;
+      const base = a.name.replace(/\.(obj|mtl)$/i, '').toLowerCase();
+      const objAsset = isObj ? a : objs.find(o => o.name.replace(/\.obj$/i, '').toLowerCase() === base);
+      if (!objAsset) return;
+      const mtlAsset = isMtl ? a : models.find(m => /\.mtl$/i.test(m.name) && m.name.replace(/\.mtl$/i, '').toLowerCase() === base);
+      window.__forgeModelThumbnail(objAsset.url, mtlAsset?.url || null).then(dataUrl => {
+        if (!dataUrl) return;
+        const preview = document.querySelector(`.asset-card[data-id="${a.id}"] .asset-preview`);
+        if (preview) preview.innerHTML = `<img src="${dataUrl}" alt="" style="max-width:100%;max-height:100%;object-fit:contain">`;
+      });
+    });
   }
 
   $('#assetSearch')?.addEventListener('input', renderAssetGrid);
@@ -447,20 +580,21 @@
     renderAssetGrid();
   }));
 
+  async function deleteAssetById(id) {
+    const asset = state.assets.find(a => a.id === id);
+    if (!(await window.forgeConfirm(`Delete asset "${asset?.name || id}"?`, { title: 'Delete Asset', danger: true, confirmText: 'Delete' }))) return;
+    try {
+      await api(`/api/games/${encodeURIComponent(state.slug)}/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      state.assets = state.assets.filter(a => a.id !== id);
+      renderAssetGrid();
+      toast('Asset deleted');
+    } catch (error) { toast(error.message); }
+  }
+  window.__forgeDeleteAsset = deleteAssetById;
+
   $('#assetGrid')?.addEventListener('click', async e => {
     const del = e.target.closest('[data-delete]');
-    if (del) {
-      const id = del.dataset.delete;
-      const asset = state.assets.find(a => a.id === id);
-      if (!window.confirm(`Delete asset "${asset?.name || id}"?`)) return;
-      try {
-        await api(`/api/games/${encodeURIComponent(state.slug)}/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        state.assets = state.assets.filter(a => a.id !== id);
-        renderAssetGrid();
-        toast('Asset deleted');
-      } catch (error) { toast(error.message); }
-      return;
-    }
+    if (del) { deleteAssetById(del.dataset.delete); return; }
     const card = e.target.closest('.asset-card');
     if (card) toast(`${state.assets.find(a => a.id === card.dataset.id)?.name || 'Asset'} selected`);
   });
@@ -484,17 +618,20 @@
 
   async function uploadFiles(files) {
     if (!state.slug || !files.length) return;
+    let overwritten = 0;
     for (const file of files) {
       try {
         const dataUrl = await readFileAsDataUrl(file);
-        await api(`/api/games/${encodeURIComponent(state.slug)}/assets`, {
+        const { asset } = await api(`/api/games/${encodeURIComponent(state.slug)}/assets`, {
           method: 'POST',
           body: JSON.stringify({ name: file.name, category: categoryForMime(file.type), mime: file.type, dataUrl })
         });
+        if (asset?.overwritten) overwritten++;
       } catch (error) { toast(`${file.name}: ${error.message}`); log('error', `Upload failed for ${file.name}: ${error.message}`); }
     }
     await loadAssets(state.slug);
-    toast(`${files.length} asset(s) imported`);
+    const suffix = overwritten ? ` (${overwritten} overwrote existing asset${overwritten === 1 ? '' : 's'})` : '';
+    toast(`${files.length} asset(s) imported${suffix}`);
   }
   window.__forgeUploadFiles = uploadFiles;
 
@@ -518,7 +655,7 @@
 
   $('#sceneSearch').addEventListener('input', e => renderTree(e.target.value));
   $$('#transformTools .tool').forEach(b => b.onclick = () => { $$('#transformTools .tool').forEach(x => x.classList.remove('active')); b.classList.add('active'); state.tool = b.dataset.tool; toast(`${b.title.split(' ')[0]} tool active`); });
-  $$('#viewportModes button').forEach(b => b.onclick = () => { $$('#viewportModes button').forEach(x => x.classList.remove('active')); b.classList.add('active'); state.mode = b.dataset.mode; viewport.dataset.mode = state.mode; viewport.style.cursor = ''; $('#cameraMode').textContent = state.mode === '3d' ? 'Perspective' : 'Orthographic'; renderViewportObjects(); toast(`${b.textContent} workspace active`); window.forgeRedraw3D?.(); });
+  $$('#viewportModes button').forEach(b => b.onclick = () => { $$('#viewportModes button').forEach(x => x.classList.remove('active')); b.classList.add('active'); state.mode = b.dataset.mode; viewport.dataset.mode = state.mode; viewport.style.cursor = ''; $('#cameraMode').textContent = state.mode === '3d' ? 'Perspective' : 'Orthographic'; renderInspector(); renderViewportObjects(); toast(`${b.textContent} workspace active`); window.forgeRedraw3D?.(); });
   $('#gridToggle').onclick = () => { state.grid = !state.grid; window.forgeRedraw3D?.(); toast(`Grid ${state.grid ? 'enabled' : 'disabled'}`); };
   $('#snapToggle').onclick = e => { state.snap = !state.snap; e.currentTarget.classList.toggle('active', state.snap); toast(`Snap ${state.snap ? 'enabled' : 'disabled'}`); };
   $('#playButton').onclick = e => { state.playing = !state.playing; e.currentTarget.classList.toggle('running', state.playing); e.currentTarget.textContent = state.playing ? '■' : '▶'; toast(state.playing ? 'Running game preview' : 'Game preview stopped'); };
@@ -528,9 +665,9 @@
   const TOOL_MODAL_META = {
     pixel: { icon: '🖌', title: 'Pixel Art Editor', subtitle: 'Draw sprites & tiles, then save them straight to your asset library' },
     model: { icon: '◈', title: '3D Model Editor', subtitle: 'Block out simple meshes and export them as model assets' },
-    blocks: { icon: '⌘', title: 'Block Script Editor', subtitle: 'Flowlab-style visual scripting for object behavior' },
+    blocks: { icon: '⌘', title: 'Block Script Editor', subtitle: 'visual scripting for object behavior' },
     shader: { icon: '✺', title: 'Shader Editor', subtitle: 'Write & live-preview GLSL fragment shaders' },
-    animation: { icon: '▶', title: 'Animation Editor', subtitle: 'Keyframe object transforms on a scrubbable timeline' },
+    animation: { icon: '▶', title: 'Animation Editor', subtitle: 'Draw each frame by hand, then play it back like a flipbook' },
     audio: { icon: '♫', title: 'Audio Editor', subtitle: 'Mix tracks, shape waveforms and design sound' }
   };
   const toolModalOverlay = $('#toolModalOverlay');
@@ -572,7 +709,7 @@
     Edit: [['Undo', 'Ctrl+Z'], ['Redo', 'Ctrl+Y'], ['---', ''], ['Duplicate', 'Ctrl+D'], ['Delete', 'Del'], ['Editor Settings…', '']],
     Assets: [['Import Asset…', ''], ['Create', '›'], ['Reimport All', '']],
     Scene: [['New Scene', ''], ['Save Scene', 'Ctrl+S'], ['Scene Settings…', '']],
-    Project: [['Project Settings…', ''], ['Input Map…', ''], ['Package Manager…', '']],
+    Project: [['Project Settings…', ''], ['Multiplayer…', ''], ['Input Map…', ''], ['Package Manager…', '']],
     Build: [['Build Project', 'Ctrl+B'], ['Build & Run', 'Ctrl+Shift+B'], ['Export Templates…', '']],
     Window: [['Scene', ''], ['Inspector', ''], ['Assets', ''], ['Console', ''], ['Profiler', '']],
     Help: [['Documentation', 'F1'], ['Keyboard Shortcuts', ''], ['About ForgeEngine', '']]
@@ -604,7 +741,7 @@
   }
   $$('[data-split]').forEach(el => splitter(el, el.dataset.split));
   $('#layoutReset').onclick = () => { root.style.setProperty('--left', '235px'); root.style.setProperty('--right', '300px'); root.style.setProperty('--bottom', '224px'); toast('Editor layout reset'); };
-  $('#closeEditor').onclick = () => { if (state.dirty && !confirm('You have unsaved changes. Leave anyway?')) return; location.assign('/'); };
+  $('#closeEditor').onclick = async () => { if (state.dirty && !(await window.forgeConfirm('You have unsaved changes. Leave anyway?', { title: 'Unsaved Changes', danger: true, confirmText: 'Leave' }))) return; location.assign('/'); };
 
   loadGame();
 })();
@@ -682,18 +819,17 @@
       <dl class="asset-meta"><dt>Name</dt><dd>${asset.name}</dd><dt>Category</dt><dd>${asset.category}</dd><dt>Size</dt><dd>${(asset.size/1024).toFixed(1)} KB</dd></dl>
       <div class="pkg-actions">
         <button class="primary" data-attach-here>${sel ? `Attach to "${sel.name}"` : 'Select an object first'}</button>
-        <a data-download-asset href="${asset.url}" download="${asset.name}"><button>Download</button></a>
+        <a data-download-asset href="${asset.url}" download="${window.__forgeAssetDownloadName ? window.__forgeAssetDownloadName(asset) : asset.name}"><button>Download</button></a>
       </div>`;
     window.__forgeModal.open(asset.name, body, { onMount: root => {
       const attachBtn=root.querySelector('[data-attach-here]');
       if (!sel) attachBtn.disabled = true;
       attachBtn?.addEventListener('click', () => {
         if (!sel) return;
-        sel.attachments ||= [];
-        if (sel.attachments.some(a=>a.assetId===asset.id)) { toast(`${asset.name} is already attached`); return; }
-        sel.attachments.push({ id:`att-${Date.now().toString(36)}`, assetId: asset.id, name: asset.name, category: asset.category });
-        state.dirty = true; $('#dirtyDot').style.visibility = 'visible';
+        if (!window.__forgeAttachAsset(sel, asset)) return;
         window.__forgeRenderAttachments?.(sel);
+        window.__forgeSelectObject?.(sel.id);
+        window.forgeRedraw3D?.();
         window.__forgeModal.close();
         toast(`${asset.name} attached to ${sel.name}`);
       });
@@ -728,13 +864,13 @@
   click('#notifications',()=>toast(state.dirty?'Unsaved scene changes':'No new notifications'));
   click('#userAvatar',()=>toast('Account menu is managed by the host application'));
 
-  // Profiler stays as a lightweight inline mini-tool in the bottom panel.
-  const profilerEl = $('.bottom-content[data-content="profiler"]');
-  if (profilerEl) profilerEl.innerHTML = '<div class="mini-tool"><button data-capture>Capture Frame</button><span>Waiting for capture</span></div>';
-  $('[data-capture]')?.addEventListener('click',e=>{e.currentTarget.nextElementSibling.textContent=`Captured ${state.objects.length} objects at ${$('#fpsLabel').textContent}`;toast('Profiler frame captured')});
+  // Real Profiler panel (live FPS graph, renderer/memory stats, frame
+  // capture log) is built by assets/js/profiler.js, mounted into the
+  // same `.bottom-content[data-content="profiler"]` element.
 
-  // Keyframe data model is shared with the fullscreen Animation editor (assets/js/animation-editor.js).
-  state.keyframes ||= {}; // objectId -> [{frame, position, rotation, scale}]
+  // Per-object animation clips (2D pixel-grid or 3D voxel flipbooks, stored
+  // as plain JSON) live in state.animClips, initialized lazily by the
+  // fullscreen Animation editor (assets/js/animation-editor.js).
 
   // Keyboard shortcuts for modes and grid/debug.
   document.addEventListener('keydown',e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName))return;if(e.key==='1')$('#viewportModes [data-mode="2d"]')?.click();if(e.key==='2'||e.key==='3')$('#viewportModes [data-mode="3d"]')?.click();if(e.key.toLowerCase()==='g')$('#gridToggle')?.click();if(e.key.toLowerCase()==='f'&&state.selectedId){const o=state.objects.find(x=>x.id===state.selectedId);if(o)window.forgeFocusCamera?.(o)}});
@@ -787,14 +923,100 @@
   const installed = new Set(JSON.parse(localStorage.getItem(PACKAGES_KEY) || '[]'));
   const persistInstalled = () => localStorage.setItem(PACKAGES_KEY, JSON.stringify([...installed]));
 
-  const PACKAGES = [
-    { id: 'physics2d', icon: '⬡', name: '2D Physics Toolkit', desc: 'Rigidbody, colliders and simple gravity for platformers and top-down games.' },
-    { id: 'input-map', icon: '🎮', name: 'Input Manager Pro', desc: 'Remappable actions for keyboard, mouse, and gamepad input.' },
-    { id: 'save-system', icon: '💾', name: 'Save System', desc: 'Slot-based save/load with JSON serialization of scene state.' },
-    { id: 'postfx', icon: '✦', name: 'Post-Processing Pack', desc: 'Bloom, vignette and color grading passes for the 3D viewport.' },
-    { id: 'audio-mixer', icon: '♪', name: 'Audio Mixer Bus', desc: 'Grouped volume buses (Master/Music/SFX) with fade helpers.' },
-    { id: 'ui-toolkit', icon: '▣', name: 'UI Toolkit', desc: 'Anchored panels, buttons and health bars for UI Canvas objects.' }
+  // Packages are real addons now, not a flag: each ships actual `code` —
+  // a JS function body run with a `forge` API object — that hooks itself
+  // into the engine via forge.hooks.on(...) (see forge-hooks.js for the
+  // full catalog of hook points). Installing a package really runs its
+  // code; uninstalling detaches everything it registered.
+  const BUILTIN_PACKAGES = [
+    { id: 'physics2d', icon: '⬡', name: '2D Physics Toolkit', version: '1.0.0', builtin: true,
+      desc: 'Rigidbody, colliders and simple gravity for platformers and top-down games.',
+      code: `forge.hooks.on('onObjectAdd', obj => {
+  if (obj && obj.type === 'mesh') forge.log('info', \`[2D Physics] "\${obj.name}" is ready for a Rigidbody + Collider — attach one from the Inspector.\`);
+});
+forge.hooks.on('onTestStart', () => {
+  forge.toast('2D Physics Toolkit active — gravity applies to objects with a Collider block wired into this graph.');
+});` },
+    { id: 'input-map', icon: '🎮', name: 'Input Manager Pro', version: '1.0.0', builtin: true,
+      desc: 'Remappable actions for keyboard, mouse, and gamepad input.',
+      code: `forge.hooks.on('onTestStart', () => {
+  forge.log('info', '[Input Manager Pro] Remappable actions are live for this test run.');
+});` },
+    { id: 'save-system', icon: '💾', name: 'Save System', version: '1.0.0', builtin: true,
+      desc: 'Slot-based save/load with JSON serialization of scene state.',
+      code: `forge.hooks.on('onSceneSave', scene => {
+  forge.log('info', \`[Save System] Scene "\${scene.name}" (\${scene.objects.length} objects) captured a save-system snapshot.\`);
+});` },
+    { id: 'postfx', icon: '✦', name: 'Post-Processing Pack', version: '1.0.0', builtin: true,
+      desc: 'Bloom, vignette and color grading passes for the 3D viewport.',
+      code: `forge.hooks.on('onTestStart', () => forge.toast('Post-Processing Pack: bloom + vignette enabled for this preview.'));` },
+    { id: 'audio-mixer', icon: '♪', name: 'Audio Mixer Bus', version: '1.0.0', builtin: true,
+      desc: 'Grouped volume buses (Master/Music/SFX) with fade helpers.',
+      code: `forge.hooks.on('onTestStart', () => forge.log('info', '[Audio Mixer Bus] Master/Music/SFX buses initialized.'));` },
+    { id: 'ui-toolkit', icon: '▣', name: 'UI Toolkit', version: '1.0.0', builtin: true,
+      desc: 'Anchored panels, buttons and health bars for UI Canvas objects.',
+      code: `forge.hooks.on('onObjectAdd', obj => {
+  if (obj && obj.type === 'ui') forge.toast(\`UI Toolkit: "\${obj.name}" anchored and ready for a panel/button/health-bar.\`);
+});` }
   ];
+
+  const CUSTOM_PACKAGES_KEY = 'forge:customPackages';
+  let customPackages = [];
+  try { customPackages = JSON.parse(localStorage.getItem(CUSTOM_PACKAGES_KEY) || '[]'); } catch { customPackages = []; }
+  const persistCustom = () => localStorage.setItem(CUSTOM_PACKAGES_KEY, JSON.stringify(customPackages));
+
+  const allPackages = () => [...BUILTIN_PACKAGES, ...customPackages];
+  const findPackage = id => allPackages().find(p => p.id === id);
+
+  /**
+   * Actually runs a package's code, handing it a `forge` API scoped to
+   * that package: forge.hooks.on(...) auto-tags every registration with
+   * this package's id so uninstall can cleanly detach just its handlers,
+   * without needing the package author to pass an id themselves.
+   */
+  function runPackageCode(pkg) {
+    const rawHooks = window.__forgeHooks;
+    const scopedHooks = rawHooks ? {
+      on: (name, fn) => rawHooks.on(name, fn, pkg.id),
+      off: rawHooks.off,
+      list: rawHooks.list,
+      describe: rawHooks.describe
+    } : { on: () => -1, off: () => {}, list: () => ({}), describe: () => null };
+    const forgeApi = { hooks: scopedHooks, state, log, toast, escapeHtml };
+    try {
+      const register = new Function('forge', pkg.code || '');
+      register(forgeApi);
+      return true;
+    } catch (err) {
+      toast(`"${pkg.name}" failed to load: ${err.message}`);
+      log('error', `Package "${pkg.name}" threw while loading: ${err.message}`);
+      return false;
+    }
+  }
+
+  function installPackage(pkg) {
+    if (installed.has(pkg.id)) return;
+    if (!runPackageCode(pkg)) return;
+    installed.add(pkg.id);
+    persistInstalled();
+    toast(`${pkg.name} installed`);
+    log('info', `Installed package "${pkg.name}"`);
+    window.__forgeHooks?.emit('onPackageInstall', pkg);
+  }
+
+  function uninstallPackage(pkg) {
+    if (!installed.has(pkg.id)) return;
+    window.__forgeHooks?.offPackage(pkg.id);
+    installed.delete(pkg.id);
+    persistInstalled();
+    toast(`${pkg.name} uninstalled`);
+    log('info', `Uninstalled package "${pkg.name}"`);
+    window.__forgeHooks?.emit('onPackageUninstall', pkg);
+  }
+
+  // Hooks only live in memory, so anything installed in a previous
+  // session needs its code re-run once at boot to re-register.
+  allPackages().forEach(pkg => { if (installed.has(pkg.id)) runPackageCode(pkg); });
 
   const TEMPLATES = [
     { id: 'blank', icon: '＋', name: 'Blank Canvas', desc: 'Just a camera and a light — start from nothing.', objects: [
@@ -827,33 +1049,135 @@
     return `<div class="pkg-card" data-pkg="${pkg.id}">
       <div class="pkg-icon">${pkg.icon}</div>
       <div class="pkg-body">
-        <strong>${escapeHtml(pkg.name)}</strong>
-        <p>${escapeHtml(pkg.desc)}</p>
+        <strong>${escapeHtml(pkg.name)}${pkg.builtin ? '' : ' <span class="muted" style="font-weight:normal">· custom</span>'}</strong>
+        <p>${escapeHtml(pkg.desc || '')}</p>
         <div class="pkg-actions">
-          <button class="${isIn ? '' : 'primary'}" data-install="${pkg.id}">${isIn ? 'Installed ✓' : 'Install'}</button>
+          ${isIn
+            ? `<button data-uninstall="${pkg.id}">Uninstall</button>`
+            : `<button class="primary" data-install="${pkg.id}">Install</button>`}
+          <button data-view-code="${pkg.id}">View Code</button>
           <button data-download-pkg="${pkg.id}">Download</button>
+          ${pkg.builtin ? '' : `<button data-delete-pkg="${pkg.id}">Delete</button>`}
         </div>
       </div>
     </div>`;
   }
 
-  function openPackageManager() {
-    modal.open('Package Manager', `<p class="modal-desc">Install packages into this project, or download them to add to another ForgeEngine project.</p>${PACKAGES.map(packageCard).join('')}`, {
+  function hooksReferenceHtml() {
+    const catalog = window.__forgeHooks?.describe() || {};
+    const rows = Object.entries(catalog).map(([name, info]) =>
+      `<div class="pick-row pkg-hook-row"><span class="glyph">⚓</span><span class="name"><code>${escapeHtml(name)}</code>${info.args ? ` <span class="muted">${escapeHtml(info.args)}</span>` : ''}<br><span class="muted">${escapeHtml(info.desc || '')}</span></span></div>`
+    ).join('');
+    return `<details class="pkg-hooks-ref"><summary>Hooks Reference — what a package's code can hook into</summary><div class="pick-list" style="margin-top:8px">${rows || '<div class="pick-empty">No hooks registered.</div>'}</div></details>`;
+  }
+
+  function openPackageCode(pkg) {
+    const code = pkg.code || '';
+    modal.open(`${pkg.name} — Code`, `<p class="modal-desc">This is the real code that runs when the package is installed. It receives a <code>forge</code> object and calls <code>forge.hooks.on(name, fn)</code> to attach itself.</p><textarea class="pkg-code-view" readonly>${escapeHtml(code)}</textarea>`);
+  }
+
+  function openPackageEditor(existing) {
+    const editing = !!existing;
+    modal.open(editing ? `Edit "${existing.name}"` : 'New Package', `
+      <p class="modal-desc">A package is real code: it receives <code>forge</code> and calls <code>forge.hooks.on(name, fn)</code> to hook into the engine.</p>
+      <div class="pkg-field-row">
+        <input id="pkgName" type="text" placeholder="Package name" value="${escapeHtml(existing?.name || '')}">
+        <input id="pkgIcon" type="text" class="pkg-field-icon" placeholder="Icon" value="${escapeHtml(existing?.icon || '🧩')}" maxlength="2">
+      </div>
+      <input id="pkgDesc" type="text" class="pkg-desc-input" placeholder="Short description" value="${escapeHtml(existing?.desc || '')}">
+      <textarea id="pkgCode" class="pkg-code-input" placeholder="forge.hooks.on('onObjectAdd', obj => {&#10;  forge.toast(\`Hello, \${obj.name}\`);&#10;});">${escapeHtml(existing?.code || '')}</textarea>
+      ${hooksReferenceHtml()}
+      <div class="pkg-actions" style="margin-top:10px">
+        <button class="primary" id="pkgSave">${editing ? 'Save Package' : 'Create Package'}</button>
+      </div>
+    `, {
       onMount: root => {
+        root.querySelector('#pkgSave').addEventListener('click', () => {
+          const name = root.querySelector('#pkgName').value.trim();
+          const code = root.querySelector('#pkgCode').value;
+          if (!name) { toast('Give the package a name first'); return; }
+          try { new Function('forge', code); }
+          catch (err) { toast(`Code has a syntax error: ${err.message}`); return; }
+          const pkg = existing || { id: `custom-${Date.now().toString(36)}`, builtin: false, version: '1.0.0' };
+          pkg.name = name;
+          pkg.icon = root.querySelector('#pkgIcon').value.trim() || '🧩';
+          pkg.desc = root.querySelector('#pkgDesc').value.trim();
+          pkg.code = code;
+          if (editing) {
+            if (installed.has(pkg.id)) { window.__forgeHooks?.offPackage(pkg.id); runPackageCode(pkg); }
+          } else {
+            customPackages.push(pkg);
+          }
+          persistCustom();
+          toast(`${pkg.name} ${editing ? 'saved' : 'created'}`);
+          log('info', `${editing ? 'Updated' : 'Created'} package "${pkg.name}"`);
+          openPackageManager();
+        });
+      }
+    });
+  }
+
+  function importPackageFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      let data;
+      try { data = JSON.parse(reader.result); } catch { toast('Not a valid package file'); return; }
+      if (!data.name || typeof data.code !== 'string') { toast('Package file is missing a name or code'); return; }
+      const pkg = { id: data.forgePackage || `custom-${Date.now().toString(36)}`, builtin: false,
+        name: data.name, desc: data.description || data.desc || '', icon: data.icon || '🧩',
+        version: data.version || '1.0.0', code: data.code };
+      if (findPackage(pkg.id)) pkg.id = `${pkg.id}-${Date.now().toString(36)}`;
+      customPackages.push(pkg);
+      persistCustom();
+      toast(`${pkg.name} imported`);
+      log('info', `Imported package "${pkg.name}"`);
+      openPackageManager();
+    };
+    reader.readAsText(file);
+  }
+
+  function openPackageManager() {
+    const toolbar = `<div class="pkg-actions" style="margin-bottom:10px">
+        <button class="primary" id="pkgNew">➕ New Package</button>
+        <button id="pkgImport">⇧ Import…</button>
+        <input id="pkgImportFile" type="file" accept="application/json,.json" style="display:none">
+      </div>`;
+    modal.open('Package Manager', `<p class="modal-desc">Install packages into this project — each one is real code that hooks into the engine — or download/import them to share with other ForgeEngine projects.</p>${toolbar}${hooksReferenceHtml()}${allPackages().map(packageCard).join('')}`, {
+      onMount: root => {
+        root.querySelector('#pkgNew').addEventListener('click', () => openPackageEditor());
+        const fileInput = root.querySelector('#pkgImportFile');
+        root.querySelector('#pkgImport').addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => { if (fileInput.files[0]) importPackageFile(fileInput.files[0]); });
+
         root.querySelectorAll('[data-install]').forEach(btn => btn.addEventListener('click', () => {
-          const id = btn.dataset.install;
-          const pkg = PACKAGES.find(p => p.id === id);
-          if (installed.has(id)) return;
-          installed.add(id);
-          persistInstalled();
-          btn.textContent = 'Installed ✓';
-          btn.classList.remove('primary');
-          toast(`${pkg.name} installed`);
-          log('info', `Installed package "${pkg.name}"`);
+          const pkg = findPackage(btn.dataset.install);
+          if (!pkg) return;
+          installPackage(pkg);
+          openPackageManager();
+        }));
+        root.querySelectorAll('[data-uninstall]').forEach(btn => btn.addEventListener('click', () => {
+          const pkg = findPackage(btn.dataset.uninstall);
+          if (!pkg) return;
+          uninstallPackage(pkg);
+          openPackageManager();
+        }));
+        root.querySelectorAll('[data-view-code]').forEach(btn => btn.addEventListener('click', () => {
+          const pkg = findPackage(btn.dataset.viewCode);
+          if (pkg) openPackageCode(pkg);
+        }));
+        root.querySelectorAll('[data-delete-pkg]').forEach(btn => btn.addEventListener('click', async () => {
+          const pkg = findPackage(btn.dataset.deletePkg);
+          if (!pkg) return;
+          if (!(await window.forgeConfirm(`Delete the "${pkg.name}" package? This can't be undone.`, { title: 'Delete Package', danger: true, confirmText: 'Delete' }))) return;
+          if (installed.has(pkg.id)) uninstallPackage(pkg);
+          customPackages = customPackages.filter(p => p.id !== pkg.id);
+          persistCustom();
+          toast(`${pkg.name} deleted`);
+          openPackageManager();
         }));
         root.querySelectorAll('[data-download-pkg]').forEach(btn => btn.addEventListener('click', () => {
-          const pkg = PACKAGES.find(p => p.id === btn.dataset.downloadPkg);
-          download(`${pkg.id}.forge-package.json`, JSON.stringify({ forgePackage: pkg.id, name: pkg.name, description: pkg.desc, version: '1.0.0' }, null, 2));
+          const pkg = findPackage(btn.dataset.downloadPkg);
+          download(`${pkg.id}.forge-package.json`, JSON.stringify({ forgePackage: pkg.id, name: pkg.name, description: pkg.desc, version: pkg.version || '1.0.0', icon: pkg.icon, code: pkg.code }, null, 2));
           toast(`${pkg.name} downloaded`);
         }));
       }
@@ -888,9 +1212,9 @@
   function openTemplates() {
     modal.open('Templates', `<p class="modal-desc">Apply a starter template to the current scene, or download one to import elsewhere.</p>${TEMPLATES.map(templateCard).join('')}`, {
       onMount: root => {
-        root.querySelectorAll('[data-use-tpl]').forEach(btn => btn.addEventListener('click', () => {
+        root.querySelectorAll('[data-use-tpl]').forEach(btn => btn.addEventListener('click', async () => {
           const tpl = TEMPLATES.find(t => t.id === btn.dataset.useTpl);
-          if (state.objects.length && !confirm(`Replace the ${state.objects.length} object(s) in "${state.sceneName}" with the "${tpl.name}" template?`)) return;
+          if (state.objects.length && !(await window.forgeConfirm(`Replace the ${state.objects.length} object(s) in "${state.sceneName}" with the "${tpl.name}" template?`, { title: 'Apply Template', danger: true, confirmText: 'Replace' }))) return;
           state.objects = templateToObjects(tpl);
           state.selectedId = state.objects[0]?.id || null;
           state.dirty = true;
@@ -900,6 +1224,7 @@
           modal.close();
           toast(`"${tpl.name}" template applied`);
           log('info', `Applied template "${tpl.name}"`);
+          window.__forgeHooks?.emit('onTemplateApply', tpl, state.objects);
         }));
         root.querySelectorAll('[data-download-tpl]').forEach(btn => btn.addEventListener('click', () => {
           const tpl = TEMPLATES.find(t => t.id === btn.dataset.downloadTpl);
@@ -924,17 +1249,7 @@
         root.querySelectorAll('[data-asset]').forEach(row => row.addEventListener('click', () => {
           const asset = assets.find(a => a.id === row.dataset.asset);
           if (!asset) return;
-          o.attachments ||= [];
-          if (o.attachments.some(a => a.assetId === asset.id)) { toast(`${asset.name} is already attached`); return; }
-          o.attachments.push({ id: `att-${Date.now().toString(36)}`, assetId: asset.id, name: asset.name, category: asset.category });
-          // Image (pixel-art, texture, etc.) and model assets replace the
-          // object's placeholder shape with the asset itself — the object
-          // now "possesses" that visual, everywhere it's drawn.
-          if ((asset.category === 'image' || asset.category === 'model') && asset.url) {
-            o.spriteUrl = asset.url;
-          }
-          state.dirty = true;
-          document.getElementById('dirtyDot').style.visibility = 'visible';
+          if (!window.__forgeAttachAsset(o, asset)) return;
           window.__forgeRenderAttachments?.(o);
           // Re-render the tree/inspector/viewport so the swapped-in sprite
           // and the attachment badge show up immediately.
@@ -955,23 +1270,30 @@
 
 /* ---------------------------------------------------------------
    Context menu: right-click (desktop) or long-press (touch/mobile)
-   on a hierarchy row or a viewport object. Lets you attach a
-   script/asset to that specific object, plus the usual object ops.
+   on a hierarchy row, a viewport object, or an Assets-tab card.
+   All three share one #contextMenu element and one click handler
+   (rather than each wiring up its own independent listener on that
+   shared element, which risked two handlers both reacting to the
+   same click — e.g. an asset's "Delete" also matching a stale
+   object targetId and deleting the wrong thing).
 --------------------------------------------------------------- */
 (() => {
   const $ = s => document.querySelector(s);
-  const $$ = s => [...document.querySelectorAll(s)];
   const state = window.__forgeState;
   const menu = $('#contextMenu');
-  if (!state || !menu) return;
+  const api = window.__forgeApi;
+  const modal = window.__forgeModal;
+  if (!state || !menu || !api || !modal) return;
   const toast = msg => window.__forgeToast?.(msg);
+  const log = (level, msg) => window.__forgeLog?.(level, msg);
   const escapeHtml = window.__forgeEscape || (s => s);
 
   let targetId = null;
+  let targetKind = 'object'; // 'object' | 'asset'
 
   function closeMenu() { menu.classList.remove('show'); targetId = null; }
 
-  function itemsFor(o) {
+  function itemsForObject(o) {
     if (!o) {
       return [
         ['add', '＋', 'Add Object'],
@@ -993,11 +1315,41 @@
     ];
   }
 
-  function openMenu(x, y, objectId) {
-    targetId = objectId;
-    const o = state.objects.find(v => v.id === objectId) || null;
-    const items = itemsFor(o);
-    menu.innerHTML = (o ? `<div class="ctx-title">${escapeHtml(o.name)}</div>` : '<div class="ctx-title">Scene</div>') +
+  // Which tool tab (see openToolModal below) and which of that tool's
+  // exposed `__forge*EditorLoad` hooks handles editing each asset
+  // category. "script" assets are opened in the Blocks tab (the visual
+  // editor that produces them) rather than a plain text box — see
+  // window.__forgeBlockEditorLoad in block-editor.js.
+  const EDIT_TOOL = { image: 'pixel', model: 'model', shader: 'shader', audio: 'audio', script: 'blocks' };
+  const EDIT_LOAD_HOOK = { pixel: '__forgePixelEditorLoad', model: '__forgeModelEditorLoad', shader: '__forgeShaderEditorLoad', audio: '__forgeAudioEditorLoad', blocks: '__forgeBlockEditorLoad' };
+  const EDIT_LABEL = { image: 'Edit in Pixel Art…', model: 'Edit in Model Editor…', shader: 'Edit in Shader Editor…', audio: 'Edit in Audio Editor…', script: 'Edit in Blocks…' };
+
+  function itemsForAsset(a) {
+    const items = [];
+    if (EDIT_LABEL[a.category]) items.push(['edit-asset', '✎', EDIT_LABEL[a.category]]);
+    items.push(['rename-asset', '✎', 'Rename']);
+    items.push(['duplicate-asset', '⧉', 'Duplicate']);
+    items.push(['download-asset', '⇩', 'Download']);
+    items.push('---');
+    items.push(['delete-asset', '✕', 'Delete', 'danger']);
+    return items;
+  }
+
+  function openMenu(x, y, id, kind = 'object') {
+    let items, title;
+    if (kind === 'asset') {
+      const a = state.assets.find(v => v.id === id);
+      if (!a) return;
+      items = itemsForAsset(a);
+      title = a.name;
+    } else {
+      const o = state.objects.find(v => v.id === id) || null;
+      items = itemsForObject(o);
+      title = o ? o.name : 'Scene';
+    }
+    targetId = id;
+    targetKind = kind;
+    menu.innerHTML = `<div class="ctx-title">${escapeHtml(title)}</div>` +
       items.map(it => it === '---' ? '<hr>' : `<button data-act="${it[0]}"${it[3] ? ` class="${it[3]}"` : ''}><span class="ctx-icon">${it[1]}</span>${it[2]}</button>`).join('');
     const vw = innerWidth, vh = innerHeight;
     const mw = 210, mh = items.length * 30 + 30;
@@ -1006,15 +1358,115 @@
     menu.classList.add('show');
   }
 
-  menu.addEventListener('click', e => {
+  // --- asset actions ------------------------------------------------
+  // Loads an asset's actual content into the right editor tool and
+  // switches to it, rather than just opening a blank tab. Each editor
+  // module exposes its own `__forge*EditorLoad(asset)` hook for this
+  // (pixel-editor.js, model-editor.js, shader-editor.js, audio-editor.js,
+  // block-editor.js). A script that wasn't actually created in the Block
+  // Editor (so it has no saved node graph — see block-editor.js) still
+  // opens the Blocks tab, which then explains that and falls back to the
+  // plain-text editor below instead of showing an empty canvas.
+  function editAsset(a) {
+    const tool = EDIT_TOOL[a.category];
+    if (!tool) { toast(`Editing isn't supported yet for "${a.category}" assets`); return; }
+    if (tool === 'blocks' && !(a.graph && Array.isArray(a.graph.nodes))) { openScriptEditModal(a); return; }
+    window.__forgeOpenToolModal?.(tool);
+    window[EDIT_LOAD_HOOK[tool]]?.(a);
+  }
+
+  async function openScriptEditModal(a) {
+    let source = a.script;
+    if (typeof source !== 'string') {
+      try { source = await (await fetch(a.url)).text(); } catch { source = ''; }
+    }
+    const body = `<p class="modal-desc">"${escapeHtml(a.name)}" wasn't created in the Block Editor, so it has no blocks to reopen — edit its raw source here instead, then Save to write it back to this asset.</p>
+      <textarea id="assetScriptEdit" spellcheck="false" style="width:100%;min-height:320px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;background:#0d0f14;color:#dfe3ea;border:1px solid #2a2f3a;border-radius:6px;padding:10px;resize:vertical;box-sizing:border-box">${escapeHtml(source)}</textarea>
+      <div class="pkg-actions" style="margin-top:10px"><button class="primary" data-save-script>Save</button></div>`;
+    modal.open(`Edit "${a.name}"`, body, {
+      onMount: root => {
+        root.querySelector('[data-save-script]').addEventListener('click', async () => {
+          const code = root.querySelector('#assetScriptEdit').value;
+          try {
+            const { asset: updated } = await api(`/api/games/${encodeURIComponent(state.slug)}/assets/${encodeURIComponent(a.id)}`, { method: 'PATCH', body: JSON.stringify({ code }) });
+            Object.assign(a, updated);
+            window.__forgeLoadAssets?.();
+            modal.close();
+            toast(`Saved "${updated.name}"`);
+            log('info', `Edited script asset "${updated.name}"`);
+          } catch (error) { toast(error.message); }
+        });
+      }
+    });
+  }
+
+  async function renameAsset(a) {
+    const name = await window.forgePrompt('Rename asset', a.name, { title: 'Rename Asset' });
+    if (!name || !name.trim() || name.trim() === a.name) return;
+    try {
+      const { asset: updated } = await api(`/api/games/${encodeURIComponent(state.slug)}/assets/${encodeURIComponent(a.id)}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) });
+      Object.assign(a, updated);
+      window.__forgeLoadAssets?.();
+      toast(`Renamed to "${updated.name}"`);
+    } catch (error) { toast(error.message); }
+  }
+
+  async function duplicateAsset(a) {
+    try {
+      const dot = a.name.lastIndexOf('.');
+      const newName = dot > 0 ? `${a.name.slice(0, dot)} copy${a.name.slice(dot)}` : `${a.name} copy`;
+      let payload;
+      if (typeof a.script === 'string') {
+        payload = { name: newName, category: a.category, code: a.script };
+      } else {
+        const blob = await (await fetch(a.url)).blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        payload = { name: newName, category: a.category, mime: a.mime, dataUrl };
+      }
+      const { asset: created } = await api(`/api/games/${encodeURIComponent(state.slug)}/assets`, { method: 'POST', body: JSON.stringify(payload) });
+      await window.__forgeLoadAssets?.();
+      toast(`Duplicated as "${created.name}"`);
+    } catch (error) { toast(error.message); }
+  }
+
+  function downloadAsset(a) {
+    const link = document.createElement('a');
+    link.href = a.url;
+    link.download = window.__forgeAssetDownloadName ? window.__forgeAssetDownloadName(a) : a.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  // --- single click handler for both kinds ---------------------------
+  menu.addEventListener('click', async e => {
     const btn = e.target.closest('button[data-act]');
-    if (!btn) return;
+    if (!btn || !targetId) return;
     const act = btn.dataset.act;
-    const o = state.objects.find(v => v.id === targetId);
+    const kind = targetKind;
+    const id = targetId;
     closeMenu();
+
+    if (kind === 'asset') {
+      const a = state.assets.find(v => v.id === id);
+      if (!a) return;
+      if (act === 'edit-asset') editAsset(a);
+      else if (act === 'rename-asset') renameAsset(a);
+      else if (act === 'duplicate-asset') duplicateAsset(a);
+      else if (act === 'download-asset') downloadAsset(a);
+      else if (act === 'delete-asset') window.__forgeDeleteAsset?.(a.id);
+      return;
+    }
+
+    const o = state.objects.find(v => v.id === id);
     if (act === 'select' && o) document.querySelector(`.tree-row[data-id="${o.id}"]`)?.click();
     else if (act === 'attach-script' || act === 'attach-asset') { if (o) window.__forgeOpenAttachPicker?.(o.id); }
-    else if (act === 'rename' && o) { const name = prompt('Rename object', o.name); if (name) { o.name = name.trim() || o.name; $('#objectName').value = o.name; document.getElementById('sceneSearch').dispatchEvent(new Event('input')); state.dirty = true; $('#dirtyDot').style.visibility = 'visible'; } }
+    else if (act === 'rename' && o) { const name = await window.forgePrompt('Rename object', o.name, { title: 'Rename Object' }); if (name) { o.name = name.trim() || o.name; $('#objectName').value = o.name; document.getElementById('sceneSearch').dispatchEvent(new Event('input')); state.dirty = true; $('#dirtyDot').style.visibility = 'visible'; } }
     else if (act === 'duplicate' && o) { const n = JSON.parse(JSON.stringify(o)); n.id = `object-${Date.now().toString(36)}`; n.name += ' Copy'; n.position.x += 16; state.objects.push(n); state.selectedId = n.id; document.getElementById('sceneSearch').dispatchEvent(new Event('input')); window.forgeRedraw3D?.(); state.dirty = true; $('#dirtyDot').style.visibility = 'visible'; toast(`Duplicated "${o.name}"`); }
     else if (act === 'focus' && o) { state.selectedId = o.id; document.querySelector(`.tree-row[data-id="${o.id}"]`)?.click(); window.forgeFocusCamera?.(o); }
     else if (act === 'delete' && o) $('#deleteObject')?.click();
@@ -1026,23 +1478,33 @@
   document.addEventListener('click', e => { if (!e.target.closest('#contextMenu')) closeMenu(); });
   document.addEventListener('contextmenu', e => { if (!e.target.closest('#contextMenu')) closeMenu(); });
 
-  // Desktop right-click.
-  function wireContextTarget(el, getObjectId) {
+  // Desktop right-click + mobile long-press, generalized over both kinds.
+  function wireContextTarget(el, getId, kind = 'object') {
     el.addEventListener('contextmenu', e => {
+      const id = getId(e);
+      if (!id) return;
       e.preventDefault();
       if (window.__forgeSuppressContextMenu) { window.__forgeSuppressContextMenu = false; return; }
-      openMenu(e.clientX, e.clientY, getObjectId(e));
+      openMenu(e.clientX, e.clientY, id, kind);
+      // This event is still bubbling up toward document, where a separate
+      // listener closes the menu on any contextmenu/click that lands
+      // outside it (see below) — without stopping propagation here, that
+      // same listener sees this very event land outside #contextMenu (the
+      // menu didn't exist at e.target's position yet) and closes the menu
+      // immediately after openMenu() just opened it, so it never actually
+      // appears to show up.
+      e.stopPropagation();
     });
-    // Mobile long-press (works alongside touch drag/orbit elsewhere:
-    // this only fires if the finger doesn't move much before the delay).
     let timer = null, sx = 0, sy = 0, moved = false;
     el.addEventListener('touchstart', e => {
       if (e.touches.length !== 1) return;
+      const id = getId({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY, target: e.target });
+      if (!id) return;
       moved = false;
       sx = e.touches[0].clientX; sy = e.touches[0].clientY;
       timer = setTimeout(() => {
         if (moved) return;
-        openMenu(sx, sy, getObjectId({ clientX: sx, clientY: sy, target: e.target }));
+        openMenu(sx, sy, id, kind);
         if (navigator.vibrate) navigator.vibrate(15);
       }, 500);
     }, { passive: true });
@@ -1055,12 +1517,15 @@
   }
 
   // Hierarchy rows are re-rendered often, so delegate from the tree container.
-  wireContextTarget($('#sceneTree'), e => e.target.closest('.tree-row')?.dataset.id || null);
+  wireContextTarget($('#sceneTree'), e => e.target.closest('.tree-row')?.dataset.id || null, 'object');
   // Viewport (both 2D and 3D): hit-tested by the canvas renderer below,
   // which already knows how to hit-test either mode (see forgeHitTest3D).
   // The old separate #viewportObjects DOM hit-target has been removed along
   // with the duplicate shapes it used to draw.
-  wireContextTarget($('#threeCanvas'), e => window.forgeHitTest3D?.(e.clientX, e.clientY)?.id || null);
+  wireContextTarget($('#threeCanvas'), e => window.forgeHitTest3D?.(e.clientX, e.clientY)?.id || null, 'object');
+  // Assets tab.
+  const assetGrid = $('#assetGrid');
+  if (assetGrid) wireContextTarget(assetGrid, e => e.target.closest('.asset-card')?.dataset.id || null, 'asset');
 })();
 
 /* ---------------------------------------------------------------
@@ -1182,6 +1647,7 @@
     else if (label === 'Reimport All') $('#assetSearch')?.dispatchEvent(new Event('input'));
     else if (label.startsWith('Scene Settings')) $('#inspectorMenu')?.click();
     else if (label.startsWith('Project Settings')) $('#debugToggle')?.click();
+    else if (label.startsWith('Multiplayer')) window.__forgeOpenMultiplayerPanel?.();
     else if (label.startsWith('Input Map')) { selectBottom('console'); toast('Input shortcuts are listed in Debug controls'); }
     else if (label.startsWith('Package Manager')) window.__forgeOpenPackageManager?.();
     else if (label === 'Build Project' || label === 'Build & Run') download('forge-scene.json', JSON.stringify({ name: state.sceneName, objects: state.objects }, null, 2));

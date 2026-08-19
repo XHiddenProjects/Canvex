@@ -867,6 +867,14 @@ button {
 .vector input:nth-child(3) {
     border-left: 2px solid #5f94cf;
 }
+/* Position is X/Y only — the Z input stays in the DOM (so the existing
+   x/y/z JS wiring keeps working) but is hidden and excluded from layout. */
+.vector.vector-2axis {
+    grid-template-columns: repeat(2, 1fr);
+}
+.vector.vector-2axis input:nth-child(3) {
+    display: none;
+}
 .asset-field {
     display: grid;
     grid-template-columns: 38px 1fr 24px;
@@ -1015,6 +1023,12 @@ button {
     height: 64px;
     display: grid;
     place-items: center;
+    /* Solid panel background by default — only real images can have actual
+       transparency worth visualizing with a checker pattern. This used to
+       be inverted (checkerboard by default, dark background opted in via
+       :not(.sprite):not(.scene):not(.script)) and script cards were
+       missing from that opt-in list, so JS/audio/model icons rendered on
+       a checkerboard as if they were transparent PNGs. */
     background: #181a1f;
     border: 1px solid #343942;
     border-radius: 3px;
@@ -1022,6 +1036,7 @@ button {
     color: #9ba1aa;
 }
 .asset-card.sprite .asset-preview {
+    background: #fff repeating-conic-gradient(#c9cdd4 0% 25%, #ffffff 0% 50%) 50% / 12px 12px;
     color: var(--accent2);
 }
 .asset-card.scene .asset-preview {
@@ -1101,11 +1116,18 @@ button {
 .fbe-item:hover .fbe-item-add { opacity: 1; color: var(--cat-color, var(--accent)); }
 
 /* --- Canvas / graph surface --- */
-.fbe-canvas-wrap { flex: 1; min-height: 0; overflow: auto; background: #14161a; position: relative; }
+.fbe-canvas-wrap { flex: 1; min-height: 0; overflow: auto; background: #14161a; position: relative; overscroll-behavior: contain; }
+.fbe-canvas-wrap.is-panning { cursor: grabbing; user-select: none; }
+/* Block Editor's canvas wrap pans via its own translate-based transform
+   (see assets/js/block-editor.js), not native scrolling, so its scrollbar
+   is disabled here. Scoped to its id — the Shader Editor reuses the
+   .fbe-canvas-wrap class with plain native scrolling and keeps its bar. */
+#fbeCanvasWrap { overflow: hidden; }
 .fbe-canvas {
   position: relative; min-width: 1600px; min-height: 900px;
   background-image: radial-gradient(circle, #2a2e35 1px, transparent 1px);
   background-size: 22px 22px;
+  will-change: transform;
 }
 .fbe-canvas.drag-over { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .fbe-wires { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
@@ -1161,6 +1183,12 @@ button {
 .fbe-toolbar-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
 .fbe-play { background: #23272e; border: 1px solid #3a3f47; }
 .fbe-play.is-live { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+.fbe-zoom-controls { display: flex; align-items: center; gap: 2px; }
+.fbe-zoom-controls button { width: 22px; height: 22px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; line-height: 1; background: #23272e; border: 1px solid #3a3f47; border-radius: 4px; }
+.fbe-zoom-controls button:hover { background: #2c313a; border-color: var(--accent); }
+.fbe-zoom-controls #fbeZoomReset { width: auto; padding: 0 8px; font-size: 11px; }
+.fbe-zoom-controls #fbeZoomValue { min-width: 40px; text-align: center; font-size: 11px; font-family: "SFMono-Regular", Consolas, monospace; color: #b7bcc4; user-select: none; }
 
 /* --- Bottom dock: Generated Code / Test Console tabs --- */
 .fbe-bottom { border-top: 1px solid var(--line); display: flex; flex-direction: column; max-height: 42%; }
@@ -1520,7 +1548,7 @@ button { cursor:pointer; }
     display: none;
     position: fixed;
     inset: 0;
-    z-index: 80;
+    z-index: 10000;
     background: #0009;
     align-items: center;
     justify-content: center;
@@ -1597,7 +1625,65 @@ button { cursor:pointer; }
 .pick-row .glyph { width: 20px; text-align: center; opacity: .8; }
 .pick-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-empty { color: var(--muted); font-size: 11.5px; padding: 14px 4px; text-align: center; }
+
+/* --- Package Manager: code view/editor + hooks reference --- */
+.pkg-code-view, .pkg-code-input {
+    width: 100%; min-height: 220px; resize: vertical;
+    font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; line-height: 1.5;
+    background: #14161a; color: #c7cad0;
+    border: 1px solid var(--line2, #424852); border-radius: 6px; padding: 10px;
+}
+.pkg-code-view { color: #9aa0aa; }
+.pkg-field-row { display: flex; gap: 6px; margin-bottom: 6px; }
+.pkg-field-row input[type="text"], .pkg-field-row input:not([type]) { flex: 1; }
+.pkg-field-icon { width: 56px; text-align: center; flex: none !important; }
+.pkg-desc-input { width: 100%; margin-bottom: 6px; }
+.pkg-hooks-ref {
+    border: 1px solid var(--line, #353a43); border-radius: 5px;
+    background: var(--panel2, #262a31); padding: 8px 10px; margin-bottom: 10px;
+}
+.pkg-hooks-ref summary { cursor: pointer; font-size: 11.5px; color: var(--muted); user-select: none; }
+.pkg-hooks-ref summary:hover { color: var(--text); }
+.pkg-hook-row { align-items: flex-start !important; }
+.pkg-hook-row .name { white-space: normal !important; }
+.pkg-hook-row .name code { color: var(--accent, #6ea8fe); font-size: 11px; }
 .asset-preview-large { display: flex; align-items: center; justify-content: center; min-height: 160px; background: var(--panel2, #262a31); border: 1px solid var(--line2, #424852); border-radius: 6px; margin-bottom: 10px; overflow: hidden; }
+.asset-preview-large:has(img) { background: #fff repeating-conic-gradient(#c9cdd4 0% 25%, #ffffff 0% 50%) 50% / 14px 14px; }
+
+/* Multiplayer panel (Project menu → Multiplayer…) */
+.mp-card {
+    border: 1px solid var(--line, #353a43);
+    border-radius: 6px;
+    background: var(--panel2, #262a31);
+    padding: 10px;
+    margin-bottom: 10px;
+}
+.mp-card:last-child { margin-bottom: 0; }
+.mp-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+.mp-row .switch { margin-top: 2px; flex: none; }
+.mp-row-between { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.mp-hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.mp-hint code { background: var(--panel3, #2d323a); border-radius: 3px; padding: 0 3px; }
+.mp-card .field-row span { color: #9ba0a9; }
+.mp-card .field-row input { background: #191b20; border: 1px solid #3b414a; border-radius: 3px; color: var(--text); padding: 4px 6px; height: 24px; }
+.mp-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.mp-actions button {
+    padding: 6px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--line2, #424852);
+    background: var(--panel3, #2d323a);
+    color: var(--text);
+    font-size: 11.5px;
+}
+.mp-actions button.primary { background: var(--accent); border-color: var(--accent2); color: #fff; }
+.mp-actions button:disabled { opacity: .55; cursor: default; }
+.mp-status { color: var(--muted); font-size: 11px; }
+.mp-link-row { display: flex; gap: 6px; margin-bottom: 6px; }
+.mp-link-row input { flex: 1; background: #191b20; border: 1px solid #3b414a; border-radius: 3px; color: var(--text); padding: 5px 7px; font-size: 11.5px; }
+.mp-link-row button { padding: 5px 10px; border-radius: 4px; border: 1px solid var(--line2, #424852); background: var(--panel3, #2d323a); color: var(--text); font-size: 11px; }
+.mp-players { font-size: 12px; }
+.badge.mp-live { background: #1f7a4d; color: #d9ffe9; }
+.mp-row-between .badge { min-width: unset; height: auto; padding: 2px 8px; border-radius: 9px; background: #4b515a; margin-left: 0; }
 .asset-preview-large img { max-width: 100%; max-height: 220px; object-fit: contain; }
 .asset-preview-glyph { font-size: 42px; opacity: .75; padding: 30px; }
 .asset-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 11.5px; margin: 0 0 10px; }
@@ -1675,28 +1761,38 @@ button { cursor:pointer; }
 .anim-toolbar .grow { flex: 1; }
 .anim-toolbar button.primary { background: var(--accent, #e4813a); border-color: var(--accent2, #f2a35f); color: #fff; }
 .anim-body { flex: 1; min-height: 0; display: flex; }
-.anim-stage { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; background: repeating-conic-gradient(#22262c 0% 25%, #1a1c20 0% 50%) 50% / 22px 22px; position: relative; overflow: hidden; }
-.anim-stage-obj { position: absolute; width: 64px; height: 64px; border-radius: 6px; background: linear-gradient(135deg, #41a6f6, #257179); box-shadow: 0 8px 20px rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; font-size: 22px; color: #fff; }
-.anim-side { width: 240px; border-left: 1px solid var(--line); background: #1e2126; padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
-.anim-side h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b909a; }
-.anim-clip-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 5px; border: 1px solid transparent; cursor: pointer; }
-.anim-clip-row:hover { background: #262a31; }
-.anim-clip-row.active { background: #2c3239; border-color: var(--line2, #424852); }
-.anim-timeline { flex: 0 0 auto; border-top: 1px solid var(--line); background: #17191d; }
-.anim-timeline-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-.anim-tracks { max-height: 220px; overflow: auto; }
-.anim-track { display: flex; border-bottom: 1px solid #23262c; align-items: center; }
-.anim-track-label { width: 130px; flex: 0 0 auto; padding: 6px 10px; font-size: 11px; color: #b8bdc5; }
-.anim-track-lane { position: relative; flex: 1; height: 30px; background: repeating-linear-gradient(90deg, #1c1f24 0, #1c1f24 1px, transparent 1px, transparent 40px); cursor: pointer; }
-.anim-key { position: absolute; top: 6px; width: 12px; height: 12px; transform: translateX(-50%) rotate(45deg); background: var(--accent, #e4813a); border: 1px solid #fff3; cursor: grab; }
-.anim-key.selected { background: #41a6f6; }
-.anim-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff5d73; z-index: 2; pointer-events: none; }
-.anim-ruler { position: relative; height: 18px; background: #14161a; border-bottom: 1px solid var(--line); margin-left: 130px; }
-.anim-ruler span { position: absolute; top: 2px; font-size: 9px; color: #7a808a; transform: translateX(-50%); }
+.anim-draw-tools { width: 60px; flex: 0 0 auto; border-right: 1px solid var(--line); background: #1a1c20; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 6px; overflow: auto; }
+.anim-draw-tools button.anim-tool { width: 42px; height: 34px; background: #14161a; border: 1px solid var(--line); color: #c7cad0; border-radius: 6px; cursor: pointer; font-size: 15px; padding: 0; }
+.anim-draw-tools button.anim-tool.active { background: var(--accent, #e4813a); border-color: var(--accent2, #f2a35f); }
+.anim-draw-tools button#animClearFrame { width: 42px; }
+.anim-draw-tools input[type=color] { width: 42px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+.anim-draw-tools input.anim-brush-size { width: 42px; }
+.anim-draw-tools label.toggle { display: flex; flex-direction: column; align-items: center; font-size: 9px; color: #9aa0aa; gap: 2px; cursor: pointer; text-align: center; line-height: 1.2; }
+.anim-canvas-wrap { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; background: repeating-conic-gradient(#22262c 0% 25%, #1a1c20 0% 50%) 50% / 22px 22px; position: relative; overflow: auto; }
+.anim-canvas-stack { position: relative; box-shadow: 0 10px 30px rgba(0,0,0,.5); background: transparent; }
+.anim-canvas-layer { position: absolute; left: 0; top: 0; }
+.anim-draw-surface { cursor: crosshair; touch-action: none; }
+.anim-stage-hint { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); font-size: 12px; color: #dfe2e6; background: rgba(65,166,246,.16); border: 1px solid rgba(65,166,246,.4); padding: 6px 12px; border-radius: 8px; pointer-events: none; max-width: 82%; text-align: center; line-height: 1.4; display: none; }
+.anim-frame-strip-wrap { flex: 0 0 auto; border-top: 1px solid var(--line); background: #17191d; display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
+.anim-frame-strip { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; padding-bottom: 2px; }
+.anim-frame-thumb { position: relative; flex: 0 0 auto; width: 50px; height: 50px; border-radius: 5px; border: 2px solid var(--line); background: repeating-conic-gradient(#22262c 0% 25%, #1a1c20 0% 50%) 50% / 10px 10px; cursor: pointer; overflow: hidden; }
+.anim-frame-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.anim-frame-thumb.active { border-color: var(--accent, #e4813a); }
+.anim-frame-thumb .fnum { position: absolute; left: 2px; bottom: 1px; font-size: 9px; color: #fff; background: rgba(0,0,0,.55); border-radius: 3px; padding: 0 3px; }
+.anim-frame-thumb .fdel { position: absolute; right: 1px; top: 1px; font-size: 10px; line-height: 1.4; color: #fff; background: rgba(164,57,74,.85); border-radius: 3px; padding: 1px 3px; display: none; cursor: pointer; }
+.anim-frame-thumb:hover .fdel { display: block; }
+.anim-playback { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.anim-help { flex: 0 0 auto; border-top: 1px solid var(--line); padding: 8px 12px; font-size: 11.5px; line-height: 1.5; color: #9aa0aa; background: #16181c; }
+.anim-help strong { color: #dfe2e6; }
+#anim3dStage { display: flex; }
+#anim3dLayerStage { flex: 0 0 auto; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+#anim3dLayerStage canvas { display: block; cursor: crosshair; touch-action: none; }
+#anim3dCanvas { background: #14161a; cursor: grab; }
+.px-layer:hover { border-color: #515863 !important; }
 
 /* ===== Audio editor ===== */
 .audio-editor { display: flex; width: 100%; height: 100%; color: #c7cad0; font-size: 12px; }
-.audio-side { width: 240px; border-right: 1px solid var(--line); background: #1e2126; padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.audio-side { width: 250px; border-right: 1px solid var(--line); background: #1e2126; padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .audio-side h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b909a; }
 .audio-track-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 5px; cursor: pointer; border: 1px solid transparent; }
 .audio-track-item:hover { background: #262a31; }
@@ -1706,9 +1802,248 @@ button { cursor:pointer; }
 .audio-toolbar select, .audio-toolbar input, .audio-toolbar button { background: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
 .audio-toolbar button.primary { background: var(--accent, #e4813a); border-color: var(--accent2, #f2a35f); color: #fff; }
 .audio-toolbar .grow { flex: 1; }
-.audio-wave-wrap { flex: 1; min-height: 0; padding: 14px; display: flex; align-items: center; justify-content: center; background: #14161a; }
-.audio-wave-wrap canvas { width: 100%; height: 100%; background: #101216; border: 1px solid var(--line); border-radius: 6px; }
+.audio-timeline-len-label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #9aa0aa; }
+.audio-timeline-len-label input { width: 64px !important; }
+
+/* --- Generate panel: Tone / Instrument / Vocal tabs --- */
+.audio-gen-tabs { display: flex; gap: 3px; margin-bottom: 6px; }
+.audio-gen-tabs button { flex: 1; background: #14161a; border: 1px solid var(--line); color: #9aa0aa; border-radius: 4px; padding: 5px 4px; font-size: 11px; cursor: pointer; }
+.audio-gen-tabs button.active { background: var(--accent, #e4813a); border-color: var(--accent2, #f2a35f); color: #fff; }
+.audio-gen-panel select, .audio-gen-panel input { background: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
+.audio-gen-row { display: flex; gap: 4px; margin-top: 6px; }
+
+/* --- Effects rack --- */
+.audio-fx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.audio-fx-grid button { background: #14161a; border: 1px solid var(--line); color: #d7d9dd; border-radius: 4px; padding: 6px 4px; font-size: 11px; cursor: pointer; }
+.audio-fx-grid button:hover { background: #262a31; border-color: var(--line2, #424852); }
+.audio-fx-field { margin-bottom: 10px; }
+.audio-fx-field label { display: flex; justify-content: space-between; font-size: 11.5px; color: #9aa0aa; margin-bottom: 4px; }
+.audio-fx-field input[type="range"] { width: 100%; }
+
+/* --- Multi-track timeline --- */
+.audio-timeline-wrap { flex: 1; min-height: 0; overflow: auto; background: #101216; position: relative; }
+.audio-timeline-inner { position: relative; min-width: 100%; }
+.audio-ruler { display: block; background: #14161a; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+.audio-track-row { position: relative; height: 74px; border-bottom: 1px solid var(--line); background: #14161a; }
+.audio-track-row.active { background: #191d24; }
+.audio-track-row-label { position: sticky; left: 0; z-index: 2; display: inline-block; padding: 3px 8px; margin: 4px; border-left: 3px solid #41a6f6; background: rgba(20,22,26,.85); border-radius: 3px; font-size: 10.5px; color: #d7d9dd; pointer-events: none; }
+.audio-clip { position: absolute; top: 0; height: 74px; border: 1px solid rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; background: rgba(255,255,255,.02); }
+.audio-clip-handle { position: absolute; top: 0; left: 0; right: 0; height: 16px; background: rgba(255,255,255,.08); font-size: 9.5px; color: #d7d9dd; line-height: 16px; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: grab; user-select: none; z-index: 1; }
+.audio-clip-handle:active { cursor: grabbing; background: rgba(65,166,246,.28); }
+.audio-track-canvas { position: absolute; top: 16px; left: 0; height: 58px; }
+.audio-track-row-empty { display: flex; align-items: center; justify-content: center; color: #5c6270; font-size: 11.5px; height: 90px; }
+.audio-selection { position: absolute; top: 22px; background: rgba(65,166,246,0.14); border-left: 1px solid #41a6f6; border-right: 1px solid #41a6f6; pointer-events: none; display: none; z-index: 1; }
+.audio-playhead { position: absolute; top: 22px; width: 2px; background: #ff5d73; pointer-events: none; display: none; z-index: 3; }
+
+/* --- Mixing console --- */
 .audio-mixer { flex: 0 0 auto; border-top: 1px solid var(--line); display: flex; gap: 14px; padding: 10px 14px; overflow-x: auto; background: #17191d; }
 .audio-channel { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 68px; flex: 0 0 auto; }
-.audio-channel input[type="range"] { writing-mode: vertical-lr; direction: rtl; height: 90px; }
+.audio-channel-master { border-left: 1px solid var(--line); padding-left: 14px; margin-left: 2px; }
+.audio-vu-wrap { position: relative; height: 96px; width: 100%; display: flex; align-items: center; justify-content: center; }
+.audio-vu-bar { position: absolute; bottom: 0; left: calc(50% + 8px); width: 6px; height: 0%; background: linear-gradient(0deg, #38b764, #a7f070 65%, #e4813a 85%, #b13e53); border-radius: 2px; transition: height .06s linear; }
+.audio-channel input[type="range"][data-gain], .audio-channel input[type="range"][data-master-gain] { writing-mode: vertical-lr; direction: rtl; height: 90px; }
+.audio-db-readout { font-size: 9.5px; color: #6b7078; }
+.audio-pan-slider { width: 56px; }
 .audio-channel .lbl { font-size: 10px; color: #9aa0aa; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+
+/* -----------------------------------------------------------------
+   Profiler panel — live FPS graph + renderer/memory stats + a small
+   capture log, docked in the bottom panel (assets/js/profiler.js).
+----------------------------------------------------------------- */
+.stat-good { color: var(--green); }
+.stat-warn { color: var(--warning); }
+.stat-bad { color: var(--danger); }
+
+.profiler { display: flex; flex-direction: column; width: 100%; height: 100%; color: #c7cad0; font-size: 12px; overflow: hidden; }
+.profiler-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.profiler-toolbar button { color: #c7cad0; }
+.profiler-toolbar button.primary { background: var(--accent, #41a6f6); color: #0f1013; border-color: transparent; font-weight: 600; }
+.profiler-body { display: flex; gap: 14px; padding: 12px; flex: 0 0 auto; flex-wrap: wrap; }
+.profiler-graph-card { flex: 1 1 420px; min-width: 320px; background: #0f1013; border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+.profiler-graph-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.profiler-graph-head h4 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b909a; }
+.profiler-graph-head span { font-family: Consolas, monospace; font-weight: 600; }
+#profGraph { width: 100%; height: 120px; display: block; border-radius: 4px; }
+.profiler-graph-legend { display: flex; gap: 14px; margin-top: 8px; font-size: 10.5px; color: #8b909a; }
+.profiler-graph-legend .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; }
+.profiler-graph-legend .dot.good { background: var(--green); }
+.profiler-graph-legend .dot.warn { background: var(--warning); }
+.profiler-graph-legend .dot.bad { background: var(--danger); }
+.profiler-stats { flex: 1 1 260px; min-width: 220px; background: #0f1013; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-content: start; }
+.profiler-stats span:nth-child(odd) { color: #868c96; }
+.profiler-stats span:nth-child(even) { color: #d7d9dd; text-align: right; font-family: Consolas, monospace; }
+.profiler-log { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
+.profiler-log h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b909a; }
+.profiler-log-list { flex: 1; min-height: 0; overflow: auto; background: #0f1013; border: 1px solid var(--line); border-radius: 6px; }
+.profiler-log-row { display: grid; grid-template-columns: 36px 64px 84px 84px 64px 1fr; gap: 8px; padding: 5px 10px; font-family: Consolas, monospace; font-size: 11px; border-bottom: 1px solid #1c1e22; }
+.profiler-log-row:last-child { border-bottom: 0; }
+
+/*
+ * highlight.js theme shared by every code surface in the editor (the Block
+ * Script Editor's "Generated Code" tab, the Shader Editor's GLSL source).
+ * Hand-written (not one of highlight.js's bundled styles/*.css) so the
+ * token colors sit on top of the editor's own dark palette (--bg/--panel/
+ * --text/--accent from assets/css/editor.css) instead of clashing with it.
+ * Apply the `.forge-hljs` class (alongside `.hljs`) to any element whose
+ * innerHTML is produced by hljs.highlight(...).value.
+ */
+.forge-hljs.hljs,
+#blkPreview.hljs {
+  display: block;
+  background: transparent;
+  color: var(--text, #d7d9dd);
+}
+
+.forge-hljs .hljs-comment,
+.forge-hljs .hljs-quote,
+#blkPreview .hljs-comment,
+#blkPreview .hljs-quote {
+  color: #767c88;
+  font-style: italic;
+}
+
+.forge-hljs .hljs-keyword,
+.forge-hljs .hljs-selector-tag,
+.forge-hljs .hljs-literal,
+.forge-hljs .hljs-subst,
+#blkPreview .hljs-keyword,
+#blkPreview .hljs-selector-tag,
+#blkPreview .hljs-literal,
+#blkPreview .hljs-subst {
+  color: #7aa2f7;
+}
+
+.forge-hljs .hljs-string,
+.forge-hljs .hljs-regexp,
+.forge-hljs .hljs-addition,
+#blkPreview .hljs-string,
+#blkPreview .hljs-regexp,
+#blkPreview .hljs-addition {
+  color: #9ece6a;
+}
+
+.forge-hljs .hljs-number,
+#blkPreview .hljs-number {
+  color: #ff9e64;
+}
+
+.forge-hljs .hljs-title,
+.forge-hljs .hljs-title.function_,
+.forge-hljs .hljs-section,
+#blkPreview .hljs-title,
+#blkPreview .hljs-title.function_,
+#blkPreview .hljs-section {
+  color: #e0af68;
+}
+
+.forge-hljs .hljs-variable,
+.forge-hljs .hljs-attr,
+.forge-hljs .hljs-attribute,
+.forge-hljs .hljs-property,
+#blkPreview .hljs-variable,
+#blkPreview .hljs-attr,
+#blkPreview .hljs-attribute,
+#blkPreview .hljs-property {
+  color: #c0caf5;
+}
+
+/* GLSL-specific: highlight.js's glsl grammar tags built-in types (vec3,
+   mat4, sampler2D, ...) as hljs-type rather than hljs-built_in/keyword. */
+.forge-hljs .hljs-type,
+#blkPreview .hljs-type {
+  color: #bb9af7;
+}
+
+.forge-hljs .hljs-built_in,
+.forge-hljs .hljs-class .hljs-title,
+#blkPreview .hljs-built_in,
+#blkPreview .hljs-class .hljs-title {
+  color: #f09a55; /* matches editor.css --accent2 */
+}
+
+.forge-hljs .hljs-params,
+#blkPreview .hljs-params {
+  color: #d7d9dd;
+}
+
+.forge-hljs .hljs-comment .hljs-doctag,
+.forge-hljs .hljs-meta,
+#blkPreview .hljs-comment .hljs-doctag,
+#blkPreview .hljs-meta {
+  color: #565f89;
+}
+
+.forge-hljs .hljs-deletion,
+#blkPreview .hljs-deletion {
+  color: #f7768e;
+}
+
+.forge-hljs .hljs-emphasis,
+#blkPreview .hljs-emphasis {
+  font-style: italic;
+}
+
+.forge-hljs .hljs-strong,
+#blkPreview .hljs-strong {
+  font-weight: 600;
+}
+
+/*
+ * Shader Editor code surface: a transparent, syntax-highlighted <pre><code>
+ * layer sits behind a transparent <textarea> so the caret/selection/typing
+ * still come from a real, fully-editable textarea while the visible text is
+ * the highlighted version. Both layers must share identical font metrics.
+ */
+.forge-code-editor {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+.forge-code-editor__highlight,
+.forge-code-editor__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 10px;
+  border: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+}
+.forge-code-editor__highlight {
+  pointer-events: none;
+  background: #14161a;
+}
+.forge-code-editor__input {
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: #e5e7eb;
+  z-index: 1;
+}
+.forge-code-editor__input::selection {
+  background: rgba(65, 166, 246, 0.35);
+}
+.forge-code-editor__input--readonly {
+  cursor: default;
+}
+.forge-code-editor__input--readonly ~ .forge-code-editor__highlight,
+.forge-code-editor:has(.forge-code-editor__input--readonly) .forge-code-editor__highlight {
+  opacity: 0.82;
+}
+
+/*
+ * Shader Editor: Code/Visual mode toggle + node-graph canvas. The node
+ * cards, pins and wires reuse the `.fbe-*` classes from the Block Editor
+ * (assets/js/block-editor.js) so both node-graph tools share one visual
+ * language; only the pieces unique to the shader graph live here.
+ */
+.sh-mode-toggle { display: flex; gap: 2px; background: #14161a; border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+.sh-mode-toggle button { flex: 1; background: transparent; border: 0; border-radius: 4px; padding: 5px 6px; font-size: 11px; color: #9298a1; }
+.sh-mode-toggle button.active { background: #30353d; color: #fff; }
+.sh-canvas.fbe-canvas { min-width: 1200px; min-height: 700px; }

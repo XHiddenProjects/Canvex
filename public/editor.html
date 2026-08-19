@@ -6,6 +6,7 @@
   <meta name="description" content="ForgeEngine editor">
   <title>ForgeEngine Editor</title>
   <link rel="stylesheet" href="/assets/css/editor.css">
+  <link rel="stylesheet" href="/assets/css/forms.css">
   <link rel="stylesheet" href="/assets/css/vendor/highlight-forge-theme.css">
 </head>
 <body>
@@ -162,8 +163,12 @@
       </div>
     </div>
   </div>
+  <script src="/assets/js/forge-dialogs.js"></script>
+  <script src="/assets/js/forge-hooks.js"></script>
   <script src="/assets/js/forge-3d-utils.js"></script>
   <script src="/assets/js/editor.js"></script>
+  <script type="module" src="/assets/js/model-thumbnail.js"></script>
+  <script src="/assets/js/multiplayer-panel.js"></script>
   <!-- Real Three.js viewport (WebGL scene, cameras, OrbitControls / TransformControls)
        for both the 2D and 3D editor modes. Loaded as an external module (deferred)
        so it runs after editor.js has set up window.__forgeState. External file
@@ -172,14 +177,19 @@
   <script type="module" src="/assets/js/forge-viewport-init.js"></script>
   <script src="/assets/js/pixel-editor.js"></script>
   <script type="module" src="/assets/js/model-editor.js"></script>
-  <script src="/assets/js/shader-editor.js"></script>
   <!-- Vendored (not CDN — the server's CSP is script-src 'self') build of
-       highlight.js: lib/core + the javascript language only, bundled into a
-       single browser global `hljs` with esbuild. Used by block-editor.js to
-       syntax-highlight the Generated Code tab. -->
+       highlight.js: lib/core + the javascript and glsl languages, bundled
+       into a single browser global `hljs` with esbuild. Loaded before
+       shader-editor.js and block-editor.js, which both syntax-highlight
+       code with it (GLSL source, and the Generated Code tab). -->
   <script src="/assets/js/vendor/highlight/highlight.min.js"></script>
+  <script src="/assets/js/vendor/highlight/glsl.js"></script>
+  <script src="/assets/js/shader-editor.js"></script>
   <script src="/assets/js/block-editor.js"></script>
-  <script src="/assets/js/animation-editor.js"></script>
+  <!-- Animation editor is a module (imports Three.js) for its 3D voxel
+       flipbook mode; the 2D pixel-grid mode is plain Canvas2D. -->
+  <script type="module" src="/assets/js/animation-editor.js"></script>
   <script src="/assets/js/audio-editor.js"></script>
+  <script src="/assets/js/profiler.js"></script>
 </body>
 </html>

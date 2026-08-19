@@ -1,0 +1,34 @@
+:root { color-scheme: dark; --bg: #080d19; --surface: #0d1424; --surface2: #131c30; --border: #1f2a42; --text: #e6ecf7; --muted: #93a1bd; --accent: #38bdf8; --green: #4ade80; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    header h1 { font-size: 1.25rem; margin: 0; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .identity { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .identity .who { display: flex; align-items: center; gap: 8px; }
+    .badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; background: var(--surface2); border: 1px solid var(--border); color: var(--muted); }
+    .badge.account { color: var(--green); border-color: var(--green); }
+    .status { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #f87171; }
+    .dot.live { background: var(--green); }
+    button, input { font: inherit; }
+    button { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #04202e; font-weight: 600; }
+    button:hover { filter: brightness(1.1); }
+    input[type=text], input[type=password], input[type=number] { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; width: 100%; }
+    .row { display: flex; gap: 8px; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+    .field { margin-bottom: 10px; }
+    ul.players { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+    ul.players li { background: var(--surface2); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 0.85rem; }
+    .hint { color: var(--muted); font-size: 0.85rem; margin: 6px 0 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+    #authModal { display: none; position: fixed; inset: 0; background: rgb(0 0 0 / 0.6); align-items: center; justify-content: center; }
+    #authModal .card { width: 320px; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+    .tabs button { flex: 1; }
+    .tabs button.active { background: var(--accent); color: #04202e; border-color: var(--accent); }
+    .error { color: #f87171; font-size: 0.85rem; min-height: 1.1em; }
+    .close-x { background: none; border: none; color: var(--muted); float: right; cursor: pointer; font-size: 1.1rem; }

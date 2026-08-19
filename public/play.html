@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ForgeEngine — Play</title>
+  <link rel="stylesheet" href="/assets/css/play.css">
+  <link rel="stylesheet" href="/assets/css/forms.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1 id="gameName">Loading…</h1>
+      <span class="status"><span class="dot" id="connDot"></span><span id="connLabel">Connecting…</span></span>
+    </header>
+
+    <div class="card identity">
+      <div class="who">
+        <span id="whoName">…</span>
+        <span class="badge" id="whoBadge"></span>
+      </div>
+      <div class="row" id="identityActions"></div>
+    </div>
+
+    <div class="card">
+      <strong>In this room</strong>
+      <p class="hint" id="roomHint"></p>
+      <ul class="players" id="playerList"></ul>
+    </div>
+
+    <div class="card">
+      <strong>Submit a score</strong>
+      <p class="hint">Demo of the stats/leaderboard API — a real game would call this from its own code instead.</p>
+      <div class="row" style="margin-top:8px">
+        <input type="number" id="scoreInput" placeholder="Score" style="max-width:140px">
+        <button class="primary" id="submitScore">Submit</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <strong>Leaderboard</strong>
+      <table id="leaderboardTable"><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div id="authModal">
+    <div class="card">
+      <button class="close-x" id="authClose">×</button>
+      <div class="tabs">
+        <button id="tabLogin" class="active">Log in</button>
+        <button id="tabRegister">Create account</button>
+      </div>
+      <div class="field"><label>Name</label><input type="text" id="authName" maxlength="32"></div>
+      <div class="field"><label>Password</label><input type="password" id="authPassword" maxlength="256"></div>
+      <p class="error" id="authError"></p>
+      <button class="primary" id="authSubmit" style="width:100%">Log in</button>
+      <p class="hint">Registering saves your stats under this name across any browser or device — guest data only lives in this browser.</p>
+    </div>
+  </div>
+
+  <script src="/assets/js/forge-dialogs.js"></script>
+  <script src="/assets/js/play.js"></script>
+</body>
+</html>

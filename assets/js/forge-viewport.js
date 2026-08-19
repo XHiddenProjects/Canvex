@@ -22,6 +22,8 @@ import * as THREE from './vendor/three/three.module.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
 import { TransformControls } from './vendor/three/TransformControls.js';
 import { CSS2DRenderer, CSS2DObject } from './vendor/three/CSS2DRenderer.js';
+import { OBJLoader } from './vendor/three/OBJLoader.js';
+import { MTLLoader } from './vendor/three/MTLLoader.js';
 
 const BASE_DISTANCE = 42; // default 3D orbit distance, mirrors the old CAMERA_DISTANCE
 const BASE_HALF_HEIGHT_3D = 16; // orthographic (3D) half-height in world units at zoom=1
@@ -104,6 +106,13 @@ export function initForgeViewport() {
   scene.add(grid3D, xAxis3D, zAxis3D, yAxis3D);
 
   const grid2D = makeGrid(true);
+  // The grid used to be nudged by half a cell so a freshly-added object at
+  // 0,0,0 would sit flush inside one square instead of straddling the four
+  // cells meeting at the origin — but the red/blue origin lines below are
+  // drawn at the true, unshifted 0,0, so that nudge made the grid (and any
+  // object snapped to it) visibly drift away from the origin lines. Left
+  // unshifted, the grid now matches the 3D ground grid exactly (same math,
+  // same snapping), and the origin lines pass through the actual 0,0 point.
   const xAxis2D = makeAxisLine(0xe06060, new THREE.Vector3(-200, 0, 0), new THREE.Vector3(200, 0, 0));
   const yAxis2D = makeAxisLine(0x6098df, new THREE.Vector3(0, -200, 0), new THREE.Vector3(0, 200, 0));
   scene.add(grid2D, xAxis2D, yAxis2D);
@@ -209,7 +218,7 @@ export function initForgeViewport() {
   // Sprite is camera-facing in either mode), so nothing needs to
   // be rebuilt when the mode is toggled.
   // -----------------------------------------------------------
-  const visuals = new Map(); // id -> { wrapper, pickMesh, litMat, unlitMat, label, isSprite }
+  const visuals = new Map(); // id -> { wrapper, pickMesh, litMat, unlitMat, label, isSprite, modelUrl, modelNode }
   const textureLoader = new THREE.TextureLoader();
   const textureCache = new Map();
 
@@ -220,6 +229,131 @@ export function initForgeViewport() {
     tex.colorSpace = THREE.SRGBColorSpace;
     textureCache.set(url, tex);
     return tex;
+  }
+
+  // -----------------------------------------------------------
+  // OBJ models — an attached asset whose file is a Wavefront .obj (the
+  // model editor's "Save as Asset" now exports real .obj geometry, not a
+  // custom JSON blob) gets loaded here and shown in place of the object's
+  // placeholder box, in both the 2D and 3D viewport and in Play mode.
+  // -----------------------------------------------------------
+  const objLoader = new OBJLoader();
+  const mtlLoader = new MTLLoader();
+  const modelCache = new Map(); // "objUrl|mtlUrl" -> Promise<THREE.Group> (a template, never added to the scene itself)
+  const isObjUrl = url => typeof url === 'string' && /\.obj(?:[?#]|$)/i.test(url);
+
+  // A companion .mtl is looked up fresh every sync rather than only once at
+  // attach time (see attachAssetToObject in editor.js), so a model that was
+  // attached *before* its .mtl existed — e.g. attach grass.obj, then go
+  // back into the Model Editor and re-save "grass" with colors added —
+  // still picks the .mtl up on the very next sync instead of staying stuck
+  // on the flat gray fallback until it's re-attached.
+  //
+  // This also re-derives the .obj URL itself from the attachment records'
+  // actual file names rather than trusting `o.modelUrl` blindly — both the
+  // .obj and its .mtl are "model" category assets, so an object that had
+  // its .mtl attached *after* its .obj could end up with `modelUrl`
+  // clobbered to point at the .mtl file instead (an older bug). Attachment
+  // names always carry the real extension, so use those as the source of
+  // truth whenever they're available.
+  function resolveModelUrls(o) {
+    const atts = o.attachments || [];
+    const objAtt = atts.find(a => a.category === 'model' && /\.obj$/i.test(a.name || ''));
+    const mtlAtt = atts.find(a => a.category === 'model' && /\.mtl$/i.test(a.name || ''));
+    const modelUrl = objAtt?.url || (isObjUrl(o.spriteUrl) ? o.spriteUrl : null) || o.modelUrl || null;
+    if (!modelUrl) return { modelUrl: null, mtlUrl: null };
+    let mtlUrl = mtlAtt?.url || o.mtlUrl || null;
+    if (!mtlUrl) {
+      const assets = state.assets || [];
+      const objAsset = objAtt || assets.find(a => a.category === 'model' && a.url === modelUrl);
+      const base = objAsset?.name?.replace(/\.obj$/i, '');
+      if (base) mtlUrl = assets.find(a => a.category === 'model' && a.name.toLowerCase() === `${base}.mtl`.toLowerCase())?.url || null;
+    }
+    return { modelUrl, mtlUrl };
+  }
+
+  function loadMtl(mtlUrl) {
+    if (!mtlUrl) return Promise.resolve(null);
+    return new Promise(resolve => {
+      mtlLoader.load(mtlUrl, materials => { materials.preload(); resolve(materials); }, undefined, () => resolve(null));
+    });
+  }
+
+  function loadModelTemplate(url, mtlUrl) {
+    const key = `${url}|${mtlUrl || ''}`;
+    if (modelCache.has(key)) return modelCache.get(key);
+    const promise = loadMtl(mtlUrl).then(materials => new Promise((resolve, reject) => {
+      // A companion .mtl (see model-editor.js's "Save as Asset", and
+      // attachAssetToObject in editor.js which links it) gives each
+      // primitive its real color back; without one, OBJLoader falls back
+      // to a plain default material and applyModelToVisual below recolors
+      // the whole model with a single neutral gray.
+      objLoader.setMaterials(materials);
+      objLoader.load(url, obj => resolve({ obj, hasMaterials: Boolean(materials) }), undefined, err => reject(err));
+    })).then(({ obj, hasMaterials }) => {
+      // Normalize to a unit cube centered on the origin so a model behaves
+      // like every other 1×1×1 placeholder — the object's own position/
+      // rotation/scale (applied to `wrapper`) then work exactly the same
+      // whether it's showing a box or a loaded model.
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      const maxDim = Math.max(size.x, size.y, size.z, 1e-6);
+      const scale = 1 / maxDim;
+      obj.position.sub(center.multiplyScalar(scale));
+      obj.scale.setScalar(scale);
+      const wrap = new THREE.Group();
+      wrap.userData.hasMtlMaterials = hasMaterials;
+      wrap.add(obj);
+      return wrap;
+    }).catch(err => { modelCache.delete(key); throw err; });
+    modelCache.set(key, promise);
+    return promise;
+  }
+
+  function applyModelToVisual(v, o, template) {
+    const hasMtl = Boolean(template.userData.hasMtlMaterials);
+    v.modelNode.traverse(child => {
+      if (!child.isMesh) return;
+      child.castShadow = o.type === 'mesh';
+      child.receiveShadow = o.type === 'mesh';
+      // With a real .mtl, keep the per-primitive materials OBJLoader/MTLLoader
+      // built (cloned along with the mesh) so each part's actual color shows.
+      // Without one, fall back to a single neutral material — pickMesh's
+      // material can't be reused here (see setModelForVisual: it has to stay
+      // fully transparent while a model is showing).
+      if (hasMtl && child.material) child.material = child.material.clone();
+      else child.material = v.modelMat;
+    });
+  }
+
+  function setModelForVisual(o, v, url, mtlUrl) {
+    const key = `${url || ''}|${mtlUrl || ''}`;
+    if (v.modelKey === key) return;
+    v.modelKey = key;
+    v.modelUrl = url;
+    if (v.modelNode) { v.wrapper.remove(v.modelNode); v.modelNode = null; }
+    if (!url) { v.pickMesh.visible = true; return; }
+    loadModelTemplate(url, mtlUrl).then(template => {
+      if (v.modelKey !== key) return; // swapped again (or removed) before this resolved
+      const node = template.clone(true);
+      v.modelNode = node;
+      applyModelToVisual(v, o, template);
+      v.wrapper.add(node);
+      // Keep pickMesh in the scene (it stays the raycast target for
+      // selection) but invisible-in-render so the loaded model is what's
+      // actually seen.
+      v.pickMesh.visible = true;
+      markDirty();
+    }).catch(err => {
+      v.modelKey = null;
+      v.modelUrl = null;
+      v.pickMesh.visible = true;
+      console.error('Failed to load OBJ model', url, err);
+      toast(`Couldn't load model: ${o.name}`);
+    });
   }
 
   function geometryFor(type) {
@@ -239,6 +373,9 @@ export function initForgeViewport() {
 
     const litMat = new THREE.MeshStandardMaterial({ color, roughness: 0.65, metalness: 0.08 });
     const unlitMat = new THREE.MeshBasicMaterial({ color });
+    // Dedicated material for a loaded .obj model, kept separate from
+    // litMat/unlitMat/pickMesh's material (see applyModelToVisual).
+    const modelMat = new THREE.MeshStandardMaterial({ color: 0xc7ccd4, roughness: 0.7, metalness: 0.05 });
     let pickMesh;
     let isSprite = false;
 
@@ -265,7 +402,7 @@ export function initForgeViewport() {
     wrapper.add(label);
 
     scene.add(wrapper);
-    return { wrapper, pickMesh, litMat, unlitMat, label, labelEl, isSprite };
+    return { wrapper, pickMesh, litMat, unlitMat, modelMat, label, labelEl, isSprite, modelUrl: null, modelKey: null, modelNode: null };
   }
 
   function disposeVisual(v) {
@@ -273,7 +410,9 @@ export function initForgeViewport() {
     v.pickMesh.geometry?.dispose?.();
     v.litMat?.dispose?.();
     v.unlitMat?.dispose?.();
+    v.modelMat?.dispose?.();
     v.pickMesh.material?.dispose?.();
+    if (v.modelNode) v.modelNode.traverse(child => { if (child.isMesh) child.geometry?.dispose?.(); });
     v.labelEl.remove();
   }
 
@@ -295,8 +434,25 @@ export function initForgeViewport() {
     }
     wrapper.visible = o.visible !== false;
     const enabled = o.enabled !== false;
-    pickMesh.material && (pickMesh.material.transparent = !enabled || v.isSprite);
-    if (pickMesh.material) pickMesh.material.opacity = enabled ? 1 : 0.35;
+
+    // An attached .obj model asset replaces the placeholder box with the
+    // real loaded geometry (see setModelForVisual and resolveModelUrls,
+    // which resolves the real .obj/.mtl URLs from the attachment records).
+    const { modelUrl, mtlUrl } = !v.isSprite ? resolveModelUrls(o) : { modelUrl: null, mtlUrl: null };
+    if (v.modelKey !== `${modelUrl || ''}|${mtlUrl || ''}`) setModelForVisual(o, v, modelUrl, mtlUrl);
+    if (v.modelNode) v.modelNode.visible = enabled;
+
+    // Any object rendered with an image texture (sprite, or a mesh/UI/etc.
+    // with an image assigned as its map) needs `transparent: true`, or the
+    // PNG's alpha channel is ignored and fully-transparent pixels render as
+    // opaque black instead of see-through.
+    const hasTexture = Boolean(o.spriteUrl) && !modelUrl;
+    pickMesh.material && (pickMesh.material.transparent = !enabled || v.isSprite || hasTexture || Boolean(v.modelNode));
+    if (pickMesh.material) pickMesh.material.opacity = v.modelNode ? 0 : (enabled ? 1 : 0.35);
+    // alphaTest discards near-fully-transparent texels outright rather than
+    // just blending them, which avoids dark halos/z-fighting around cutout
+    // pixel art at grazing angles or when overlapping other transparent objects.
+    if (pickMesh.material) pickMesh.material.alphaTest = hasTexture ? 0.05 : 0;
 
     if (v.isSprite) {
       const tex = getTexture(o.spriteUrl);
@@ -304,14 +460,35 @@ export function initForgeViewport() {
       pickMesh.material.color.set(tex ? 0xffffff : (TYPE_COLOR.sprite));
       pickMesh.material.needsUpdate = true;
     } else {
-      const tex = getTexture(o.spriteUrl);
+      const tex = getTexture(hasTexture ? o.spriteUrl : null);
       const mode = shadingMode();
       const useLit = mode !== 'solid';
       const activeMat = useLit ? v.litMat : v.unlitMat;
       activeMat.wireframe = mode === 'wireframe';
       activeMat.map = tex || null;
+      // Bug: this used to only check `!enabled || hasTexture`, so whenever
+      // a model was showing (hasTexture is false in that case — see above)
+      // it reset transparent back to false here, right after the placeholder
+      // box was deliberately made fully transparent a few lines up. That
+      // turned the "invisible" box solid opaque again, so it fully covered
+      // the model behind it — every shading mode except wireframe (which
+      // only draws edges, letting the model peek through the gaps) hid the
+      // model completely. Folding `Boolean(v.modelNode)` in here keeps the
+      // box actually invisible in every mode, not just wireframe.
+      activeMat.transparent = !enabled || hasTexture || Boolean(v.modelNode);
+      activeMat.alphaTest = hasTexture ? 0.05 : 0;
+      // Also stop the invisible box from writing to the depth buffer while
+      // a model is showing — it and the model occupy almost the exact same
+      // volume, so even at opacity 0 it could still depth-fight with (and
+      // partially poke through) the model's own surfaces otherwise.
+      activeMat.depthWrite = !v.modelNode;
       activeMat.needsUpdate = true;
       if (pickMesh.material !== activeMat) pickMesh.material = activeMat;
+    }
+    if (v.modelNode) {
+      const mode = shadingMode();
+      v.modelMat.wireframe = mode === 'wireframe';
+      v.modelMat.needsUpdate = true;
     }
 
     v.labelEl.textContent = o.attachments?.length ? `${o.name}  ·${o.attachments.length}` : o.name;
@@ -366,10 +543,16 @@ export function initForgeViewport() {
 
   function applyToolToGizmo() {
     const tool = state.tool || 'select';
-    if (tool === 'select' || !state.selectedId) { transformControls.enabled = false; transformControls.visible = false; return; }
+    // The "Select" tool used to hide the gizmo entirely, so clicking an
+    // object showed nothing draggable — you had to also click Move/Rotate/
+    // Scale before you could touch it, which pushed people toward typing
+    // numbers into the inspector instead. Now selecting an object always
+    // shows a draggable gizmo (translate by default); Move/Rotate/Scale
+    // just pick which handles you get.
+    if (!state.selectedId) { transformControls.enabled = false; transformControls.visible = false; return; }
     transformControls.enabled = state.ui?.gizmos !== false;
     transformControls.visible = state.ui?.gizmos !== false;
-    transformControls.setMode(tool === 'move' ? 'translate' : tool === 'rotate' ? 'rotate' : 'scale');
+    transformControls.setMode(tool === 'rotate' ? 'rotate' : tool === 'scale' ? 'scale' : 'translate');
     transformControls.showX = true; transformControls.showY = true; transformControls.showZ = true;
     if (state.mode === '2d') {
       if (tool === 'rotate') { transformControls.showX = false; transformControls.showY = false; transformControls.showZ = true; }
@@ -381,6 +564,7 @@ export function initForgeViewport() {
     transformControls.setRotationSnap(snap ? THREE.MathUtils.degToRad(15) : null);
     transformControls.setScaleSnap(snap ? 0.25 : null);
   }
+
 
   // -----------------------------------------------------------
   // Pointer handling: LMB = select (gizmo handles its own drag),
@@ -416,7 +600,7 @@ export function initForgeViewport() {
       el.textContent = `X ${Math.round(p.x)}  Y ${Math.round(p.y)}`;
     } else {
       const p = screenToGroundPoint(clientX, clientY);
-      el.textContent = p ? `X ${Math.round(p.x)}  Y 0  Z ${Math.round(p.z)}` : 'X —  Y —  Z —';
+      el.textContent = p ? `X ${Math.round(p.x)}  Y ${Math.round(p.z)}` : 'X —  Y —';
     }
   }
 
@@ -531,6 +715,26 @@ export function initForgeViewport() {
   window.forgeRedraw3D = () => markDirty();
 
   // -----------------------------------------------------------
+  // Live stats for the Profiler panel (assets/js/profiler.js). Reads
+  // straight off the renderer/state each call so it's always current,
+  // not just a snapshot taken when the profiler tab was opened.
+  // -----------------------------------------------------------
+  window.__forgeViewportStats = () => ({
+    fps,
+    mode: state.mode,
+    camera: state.mode === '2d' ? 'orthographic-2d' : (state.cameraProjection || 'perspective'),
+    objects: state.objects.length,
+    selected: state.objects.find(o => o.id === state.selectedId)?.name || null,
+    drawCalls: renderer.info.render.calls,
+    triangles: renderer.info.render.triangles,
+    points: renderer.info.render.points,
+    lines: renderer.info.render.lines,
+    geometries: renderer.info.memory.geometries,
+    textures: renderer.info.memory.textures,
+    programs: renderer.info.programs?.length ?? 0
+  });
+
+  // -----------------------------------------------------------
   // Toolbar wiring specific to the viewport (space toggle, snap
   // cycle) — these buttons existed in the markup but previously
   // had no handler.
@@ -625,6 +829,16 @@ export function initForgeViewport() {
 
     // tool switch
     if (state.tool !== lastTool) { lastTool = state.tool; applyToolToGizmo(); }
+
+    // Keep the move/rotate/scale gizmo pointed at whichever camera is
+    // actually rendering the scene right now. It used to only get
+    // re-pointed inside switchTo3DCamera(), which never runs for the
+    // flat 2D editor's dedicated camera (cam2D) — so dragging a gizmo
+    // handle in 2D mode (or right after a 2D<->3D switch) computed its
+    // drag math against a stale/mismatched camera, making the handles
+    // visually detach from the object and move it to the wrong place.
+    const cam = activeCamera();
+    if (transformControls.camera !== cam) transformControls.camera = cam;
   }
 
   function zoomLabel() {

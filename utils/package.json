@@ -3,5 +3,8 @@
     "version":"1.0.0",
     "main":"index.js",
     "description":"Forge Engines utility packages",
-    "license":"MIT"
+    "license":"MIT",
+    "dependencies": {
+        "ws": "^8.18.0"
+    }
 }

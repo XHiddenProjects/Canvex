@@ -7,7 +7,9 @@ const express = require("express");
 const {
   createGame, listGames, readGame, deleteGame,
   listScenes, readScene, createScene, deleteScene, saveScene,
-  listAssets, listAssetsDetailed, uploadAsset, deleteAsset, updateAsset, findAsset
+  listAssets, listAssetsDetailed, uploadAsset, deleteAsset, updateAsset, findAsset,
+  readMultiplayerSettings, updateMultiplayerSettings, writeMultiplayerConnectInfo,
+  readPublicGameInfo, submitStat, readLeaderboard
 } = require("../src/game-manager");
 const {
   SESSION_COOKIE,
@@ -19,6 +21,9 @@ const {
   changePassword,
   authenticateLocalRequest
 } = require("../src/account-manager");
+const multiplayerHub = require("./multiplayer-hub");
+const tunnel = require("./tunnel");
+const playerManager = require("../src/player-manager");
 
 const app = express();
 const ROOT = path.resolve(__dirname, "..");
@@ -75,6 +80,78 @@ app.post("/api/account/logout", async (req, res, next) => {
 });
 
 
+
+// ---------------------------------------------------------------------------
+// Public play surface: unlike everything below, these routes are reachable
+// with NO login — this is what makes the `/play/:slug` link something you
+// can actually hand to a friend. They're registered before the `/api` auth
+// gate on purpose so they never hit it. Identity here is `player-manager.js`
+// (guest-by-default, optional lightweight player account), which is a
+// completely separate system from the single device account gated below.
+// ---------------------------------------------------------------------------
+app.get("/play/:slug", async (req, res, next) => {
+  try {
+    await readPublicGameInfo(ROOT, req.params.slug); // 404s early if the game doesn't exist
+    res.sendFile(path.join(ROOT, "public", "play.html"));
+  } catch (error) { next(error); }
+});
+
+app.get("/api/play/:slug/info", async (req, res, next) => {
+  try { res.json({ game: await readPublicGameInfo(ROOT, req.params.slug) }); }
+  catch (error) { next(error); }
+});
+
+app.get("/api/play/:slug/rooms", async (req, res, next) => {
+  try {
+    await readPublicGameInfo(ROOT, req.params.slug); // 404s if the game doesn't exist
+    res.json({ rooms: multiplayerHub.roomStats(req.params.slug) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/play/session", async (req, res, next) => {
+  try {
+    const identity = await playerManager.resolveSession(ROOT, req);
+    res.json({ identity: identity || playerManager.createGuest(res) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/play/session/guest", async (req, res, next) => {
+  try {
+    const existing = await playerManager.resolveSession(ROOT, req);
+    const displayName = req.body?.displayName;
+    const identity = existing?.kind === "guest"
+      ? playerManager.renameGuest(res, existing.id, displayName)
+      : playerManager.createGuest(res, displayName);
+    res.json({ identity });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/play/session/register", async (req, res, next) => {
+  try { res.status(201).json({ identity: await playerManager.registerPlayer(ROOT, res, req.body || {}) }); }
+  catch (error) { next(error); }
+});
+
+app.post("/api/play/session/login", async (req, res, next) => {
+  try { res.json({ identity: await playerManager.loginPlayer(ROOT, res, req.body || {}) }); }
+  catch (error) { next(error); }
+});
+
+app.post("/api/play/session/logout", (_req, res) => {
+  playerManager.logoutPlayer(res);
+  res.json({ ok: true });
+});
+
+app.post("/api/play/:slug/stats", async (req, res, next) => {
+  try {
+    const identity = (await playerManager.resolveSession(ROOT, req)) || playerManager.createGuest(res);
+    res.json({ entry: await submitStat(ROOT, req.params.slug, identity, req.body || {}) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/play/:slug/leaderboard", async (req, res, next) => {
+  try { res.json({ leaderboard: await readLeaderboard(ROOT, req.params.slug, req.query.key, req.query.limit) }); }
+  catch (error) { next(error); }
+});
 
 // Everything else under /api requires an authenticated session.
 app.use("/api", (req, res, next) => authenticateLocalRequest(ROOT, req, res, next));
@@ -144,6 +221,67 @@ app.put("/api/games/:slug/scene", async (req, res, next) => {
   catch (error) { next(error); }
 });
 
+// Multiplayer: per-game settings (enabled / room name / player cap), read
+// and written from the editor's Multiplayer panel (Project menu).
+app.get("/api/games/:slug/multiplayer", async (req, res, next) => {
+  try { res.json({ multiplayer: await readMultiplayerSettings(ROOT, req.params.slug) }); }
+  catch (error) { next(error); }
+});
+
+app.put("/api/games/:slug/multiplayer", async (req, res, next) => {
+  try {
+    const multiplayer = await updateMultiplayerSettings(ROOT, req.params.slug, req.body || {});
+    // Keep this game's `.forge/multiplayer.json` (read automatically by
+    // `connectMultiplayer()` at runtime) pointing at whatever's reachable
+    // right now, so a saved room-name change takes effect without the user
+    // touching the game script.
+    await writeMultiplayerConnectInfo(ROOT, req.params.slug, { url: currentConnectUrlFor(req.params.slug) });
+    res.json({ multiplayer });
+  } catch (error) { next(error); }
+});
+
+// Live player/room counts for the game, so the editor can show who's
+// actually connected right now (polled while the Multiplayer panel is open).
+app.get("/api/games/:slug/multiplayer/rooms", (req, res) => {
+  res.json({ rooms: multiplayerHub.roomStats(req.params.slug) });
+});
+
+// Public tunnel: exposes this local server (including the /mp multiplayer
+// WebSocket path) behind a single shareable internet URL via `localtunnel`,
+// so players outside the host's network can join. One tunnel per running
+// server process. The subdomain requested is always the game's own slug
+// (so the link reads `wss://<game-name>.loca.lt`), and whichever game the
+// tunnel currently belongs to gets its `.forge/multiplayer.json` connect
+// file kept in sync automatically — nothing for the user to copy or paste.
+let boundPort = PORT; // updated to the real listening port once the server starts (PORT may be 0 = "OS picks one")
+function localWsUrl() { return `wss://${HOST}:${boundPort}`; }
+function currentConnectUrlFor(slug) {
+  const t = tunnel.status();
+  return t.active && t.slug === slug ? t.url.replace(/^http/, "ws") : localWsUrl();
+}
+
+app.get("/api/multiplayer/tunnel", (_req, res) => {
+  res.json({ tunnel: tunnel.status() });
+});
+
+app.post("/api/multiplayer/tunnel", async (req, res, next) => {
+  try {
+    const slug = req.body?.slug;
+    const result = await tunnel.start(boundPort, { subdomain: slug, slug });
+    if (slug) await writeMultiplayerConnectInfo(ROOT, slug, { url: result.url.replace(/^http/, "ws") });
+    res.json({ tunnel: result });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/multiplayer/tunnel", async (_req, res, next) => {
+  try {
+    const wasSlug = tunnel.status().slug;
+    const result = await tunnel.stop();
+    if (wasSlug) await writeMultiplayerConnectInfo(ROOT, wasSlug, { url: localWsUrl() });
+    res.json({ tunnel: result });
+  } catch (error) { next(error); }
+});
+
 // Assets: organized per-game under assets/<category>/, each with a JSON
 // metadata sidecar (name, tags, size, timestamps, and script source for code assets).
 app.get("/api/games/:slug/assets", async (req, res, next) => {
@@ -201,8 +339,21 @@ async function startServer() {
   try {
     await fs.mkdir(path.join(ROOT, "games"), { recursive: true });
     const tlsOptions = await loadTlsOptions();
-    https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
-      console.log(`ForgeEngine: https://${HOST}:${PORT}`);
+    const server = https.createServer(tlsOptions, app);
+    multiplayerHub.attach(server, { getSettings: slug => readMultiplayerSettings(ROOT, slug).catch(() => null) });
+    server.listen(PORT, HOST, async () => {
+      boundPort = server.address().port;
+      console.log(`ForgeEngine: https://${HOST}:${boundPort}`);
+      // Now that the server actually knows its own address, backfill every
+      // game's `.forge/multiplayer.json` with the real local connect URL
+      // (it starts out null at game-creation time) so `connectMultiplayer()`
+      // works out of the box without anyone opening the Multiplayer panel.
+      try {
+        const games = await listGames(ROOT);
+        await Promise.all(games.map(g =>
+          writeMultiplayerConnectInfo(ROOT, g.slug, { url: `wss://${HOST}:${boundPort}` }).catch(() => {})
+        ));
+      } catch { /* non-fatal — connect info stays whatever it was */ }
     });
   } catch (error) {
     if (error && error.code === "ENOENT") {

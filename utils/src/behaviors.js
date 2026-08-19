@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * Behaviors — a Flowlab-style block library, implemented on top of the
+ * Behaviors — a block library, implemented on top of the
  * lower-level primitives already in utils/src (math.js, data.js, events.js,
  * io.js, sound.js, dom.js). Nothing in here reinvents math, randomness,
  * input handling, text/list plumbing, etc. from scratch — each Behavior is a
  * thin, named wrapper that composes the existing utils functions/classes
- * into the higher-level block described in the Flowlab-style docs (Once,
+ * into the higher-level block described in the docs (Once,
  * Always, Timer, Number, Expression, Filter, Sound, Text, List Each, ...).
  *
  * This exists so the Block Editor (and any hand-written game script) calls
@@ -23,6 +23,7 @@ const { EventEmitter } = require('events');
 const math = require('./math.js');
 const data = require('./data.js');
 const { Keyboard, Pointer } = require('./events.js');
+const { connectMultiplayer } = require('./network.js');
 
 // ---------------------------------------------------------------------------
 // Triggers
@@ -245,12 +246,22 @@ function sensor(center, { shape = 'circle', radius = 64, w = 64, h = 64, objectT
  * pair. `send(name, value)` delivers to every mailbox listening on `name`.
  */
 const mailboxBus = new EventEmitter();
-function mailbox(name, onOut) {
+/**
+ * Mailbox — listens for a named message, locally and (when a multiplayer
+ * `adapter` from `connectMultiplayer()` is passed) from every other player
+ * connected to the same room.
+ */
+function mailbox(name, onOut, adapter = null) {
   const handler = value => onOut?.(value);
   mailboxBus.on(name, handler);
-  return { stop: () => mailboxBus.off(name, handler) };
+  const unsubscribeNetwork = adapter ? adapter.onMessage(name, handler) : null;
+  return { stop: () => { mailboxBus.off(name, handler); unsubscribeNetwork?.(); } };
 }
-function sendMessage(name, value) { mailboxBus.emit(name, value); }
+/** Send Message — fires a mailbox locally, and over the network when a multiplayer `adapter` is given. */
+function sendMessage(name, value, adapter = null) {
+  mailboxBus.emit(name, value);
+  adapter?.sendMessage(name, value);
+}
 function message(targetResolver, name, onDone) {
   return {
     send: value => {
@@ -262,12 +273,22 @@ function message(targetResolver, name, onDone) {
 }
 const sharedStore = new Map();
 const sharedBus = new EventEmitter();
-function shared(name, { type = 'number' } = {}) {
-  if (!sharedStore.has(name)) sharedStore.set(name, type === 'number' ? 0 : type.endsWith('List') ? [] : '');
+/**
+ * Shared — a value kept in sync across every player in the room, like the
+ * "Shared" block. Without an `adapter` it behaves exactly as
+ * before (in-process only, e.g. for local/split-screen play). Pass the
+ * object returned by `connectMultiplayer()` (see network.js) to actually
+ * broadcast changes to, and receive changes from, every other connected
+ * player — including ones joining from the public tunnel link.
+ */
+function shared(name, { type = 'number', adapter = null } = {}) {
+  const fallback = type === 'number' ? 0 : type.endsWith('List') ? [] : '';
+  if (!sharedStore.has(name)) sharedStore.set(name, adapter?.getShared(name) ?? fallback);
+  if (adapter) adapter.onSharedUpdate(name, v => { sharedStore.set(name, v); sharedBus.emit(name, v); });
   return {
-    set: v => { sharedStore.set(name, v); sharedBus.emit(name, v); return v; },
+    set: v => { sharedStore.set(name, v); sharedBus.emit(name, v); adapter?.broadcastShared(name, v); return v; },
     get: () => sharedStore.get(name),
-    add: v => { const nv = sharedStore.get(name) + v; sharedStore.set(name, nv); sharedBus.emit(name, nv); return nv; },
+    add: v => { const nv = sharedStore.get(name) + v; sharedStore.set(name, nv); sharedBus.emit(name, nv); adapter?.broadcastShared(name, nv); return nv; },
     onChange: cb => sharedBus.on(name, cb)
   };
 }
@@ -306,7 +327,7 @@ function number(initial = 0, { round: roundMode = null } = {}) {
 }
 
 /**
- * Expression — evaluates a Flowlab-style expression string using up to six
+ * Expression — evaluates a expression string using up to six
  * named variables (A-F) and the same Math.* helpers the docs list, all of
  * which already exist in utils/src/math.js.
  */
@@ -480,7 +501,7 @@ function destroyer(object, removeFn) {
 /**
  * Sound — thin control surface over an injected audio backend (the browser
  * `Audio`/`AudioContext`, or utils/src/sound.js's virtual nodes when running
- * headless). ForgeEngine supplies `backend`; this just maps Flowlab's
+ * headless). ForgeEngine supplies `backend`; this just maps
  * play/pause/stop/vol/pan/pitch inputs onto it.
  */
 function sound(backend, { loop = false, volume = 100, pan = 0, pitch = 100 } = {}) {
@@ -1084,5 +1105,5 @@ module.exports = {
   // Game Flow
   pauseGame, loadLevel, restartGame, fetchURL, save, gameSave, leaderboard, achievement, levelPhysics, userInfo, clipboard, cloud, shake, vibrate, accelerometer, gameCenter, deviceCheck, touchCheck, exit,
   // Multiplayer / Shared
-  shared, playerCount, playerCheck
+  shared, playerCount, playerCheck, connectMultiplayer
 };
