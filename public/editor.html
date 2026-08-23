@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/assets/css/editor.css">
   <link rel="stylesheet" href="/assets/css/forms.css">
   <link rel="stylesheet" href="/assets/css/vendor/highlight-forge-theme.css">
+  <link rel="stylesheet" href="/assets/css/vendor/katex.min.css">
 </head>
 <body>
   <div class="app" id="app">
@@ -72,6 +73,9 @@
           <canvas class="axis-gizmo" id="axisGizmo" width="104" height="104" aria-label="Camera orientation gizmo"></canvas>
           <div id="viewportObjects"></div>
           <div class="viewport-hint" id="viewportHint">2D Grid · Drag to pan · Wheel to zoom</div>
+          <!-- File Manager file tabs render here (code / image / video / unsupported
+               preview) in place of the Scene canvas — see forge-filemanager.js. -->
+          <div class="fm-file-pane" id="fmFilePane" style="display:none"></div>
           <div class="debug-panel" id="debugPanel">
             <div class="debug-panel-head"><strong>Debug</strong><button id="debugClose" title="Close">×</button></div>
             <div class="debug-stats" id="debugStats"></div>
@@ -118,7 +122,7 @@
       <div class="splitter horizontal" data-split="bottom" aria-hidden="true"></div>
 
       <section class="bottom-panel" id="bottomPanel">
-        <div class="bottom-tabs" id="bottomTabs"><button class="active" data-bottom="assets">Assets</button><button data-bottom="console">Console <span class="badge" id="consoleBadge">0</span></button><button data-bottom="pixel" data-tool-launch="1">⛶ Pixel Art</button><button data-bottom="model" data-tool-launch="1">⛶ Model Editor</button><button data-bottom="blocks" data-tool-launch="1">⛶ Blocks</button><button data-bottom="shader" data-tool-launch="1">⛶ Shader</button><button data-bottom="animation" data-tool-launch="1">⛶ Animation</button><button data-bottom="audio" data-tool-launch="1">⛶ Audio</button><button data-bottom="profiler">Profiler</button><span></span><button id="bottomCollapse" title="Collapse bottom panel">⌃</button><button id="bottomClose" title="Close bottom panel">×</button></div>
+        <div class="bottom-tabs" id="bottomTabs"><button class="active" data-bottom="assets">Assets</button><button data-bottom="console">Console <span class="badge" id="consoleBadge">0</span></button><button id="openFileManager" title="Browse, import/export, and manage project files">🗀 Files</button><button data-bottom="pixel" data-tool-launch="1">⛶ Pixel Art</button><button data-bottom="model" data-tool-launch="1">⛶ Model Editor</button><button data-bottom="blocks" data-tool-launch="1">⛶ Blocks</button><button data-bottom="shader" data-tool-launch="1">⛶ Shader</button><button data-bottom="animation" data-tool-launch="1">⛶ Animation</button><button data-bottom="audio" data-tool-launch="1">⛶ Audio</button><button data-bottom="profiler">Profiler</button><span></span><button id="bottomCollapse" title="Collapse bottom panel">⌃</button><button id="bottomClose" title="Close bottom panel">×</button></div>
         <div class="bottom-content active" data-content="assets">
           <aside class="asset-tree">
             <div class="asset-root">◇ Assets</div>
@@ -142,6 +146,54 @@
     <div class="context-menu" id="contextMenu"></div>
     <div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalBox"></div></div>
 
+    <!-- Custom File Manager popup: browse the project's files/ tree, create
+         folders/files, rename, delete, import (files or whole folders), and
+         export (single file, or a folder as a generated .zip). Opening a
+         file closes this and activates a viewport tab (#fmFilePane) instead
+         — see forge-filemanager.js. -->
+    <div class="fm-overlay" id="fmOverlay">
+      <div class="fm-modal">
+        <div class="fm-head">
+          <span class="fm-icon">🗀</span>
+          <strong id="fmTitle">File Manager</strong>
+          <div class="fm-breadcrumbs" id="fmBreadcrumbs"></div>
+          <span class="spacer"></span>
+          <button class="fm-btn" id="fmNewFolder" title="New folder">＋ Folder</button>
+          <button class="fm-btn" id="fmNewFile" title="New file">＋ File</button>
+          <button class="fm-btn" id="fmImportFilesBtn" title="Import file(s) into this folder">⇧ Import Files</button>
+          <button class="fm-btn" id="fmImportFolderBtn" title="Import a whole folder into this folder">⇧ Import Folder</button>
+          <button class="fm-btn" id="fmExportBtn" title="Export this folder as a .zip">⇩ Export Folder</button>
+          <button class="fm-close" id="fmClose" title="Close (Esc)">×</button>
+        </div>
+        <div class="fm-body">
+          <aside class="fm-tree" id="fmTree"></aside>
+          <div class="fm-main">
+            <div class="fm-toolbar">
+              <div class="search compact"><span>⌕</span><input id="fmSearch" placeholder="Search this folder"></div>
+              <button class="fm-btn active" id="fmGridViewBtn" title="Grid view">▦</button>
+              <button class="fm-btn" id="fmListViewBtn" title="List view">☷</button>
+            </div>
+            <div class="fm-drop" id="fmDrop">
+              <div class="fm-grid" id="fmGrid"></div>
+            </div>
+          </div>
+        </div>
+        <div class="fm-status" id="fmStatus">0 items</div>
+        <!-- Shown instead of/alongside the normal toolbar when the File
+             Manager is opened as a picker (e.g. from the Assets panel's
+             Import button) rather than for general browsing. -->
+        <div class="fm-picker-bar" id="fmPickerBar" style="display:none">
+          <span id="fmPickerHint"></span>
+          <span class="spacer"></span>
+          <button class="fm-btn" id="fmPickerSelectFolder" style="display:none">✓ Select This Folder</button>
+          <button class="fm-btn" id="fmPickerCancel">Cancel</button>
+          <button class="fm-btn active" id="fmPickerConfirm" disabled>Select</button>
+        </div>
+      </div>
+      <input type="file" id="fmImportFilesInput" multiple style="display:none">
+      <input type="file" id="fmImportFolderInput" webkitdirectory directory multiple style="display:none">
+    </div>
+
     <!-- Fullscreen tool workspace: Pixel Art / Model / Blocks / Shader / Animation / Audio all open here -->
     <div class="tool-modal-overlay" id="toolModalOverlay">
       <div class="tool-modal">
@@ -164,11 +216,15 @@
     </div>
   </div>
   <script src="/assets/js/forge-dialogs.js"></script>
+  <script src="/assets/js/theme-manager.js"></script>
+  <script src="/assets/js/upload-progress.js"></script>
   <script src="/assets/js/forge-hooks.js"></script>
   <script src="/assets/js/forge-3d-utils.js"></script>
   <script src="/assets/js/editor.js"></script>
   <script type="module" src="/assets/js/model-thumbnail.js"></script>
   <script src="/assets/js/multiplayer-panel.js"></script>
+  <script src="/assets/js/project-settings-panel.js"></script>
+  <script src="/assets/js/theme-manager-panel.js"></script>
   <!-- Real Three.js viewport (WebGL scene, cameras, OrbitControls / TransformControls)
        for both the 2D and 3D editor modes. Loaded as an external module (deferred)
        so it runs after editor.js has set up window.__forgeState. External file
@@ -177,11 +233,6 @@
   <script type="module" src="/assets/js/forge-viewport-init.js"></script>
   <script src="/assets/js/pixel-editor.js"></script>
   <script type="module" src="/assets/js/model-editor.js"></script>
-  <!-- Vendored (not CDN — the server's CSP is script-src 'self') build of
-       highlight.js: lib/core + the javascript and glsl languages, bundled
-       into a single browser global `hljs` with esbuild. Loaded before
-       shader-editor.js and block-editor.js, which both syntax-highlight
-       code with it (GLSL source, and the Generated Code tab). -->
   <script src="/assets/js/vendor/highlight/highlight.min.js"></script>
   <script src="/assets/js/vendor/highlight/glsl.js"></script>
   <script src="/assets/js/shader-editor.js"></script>
@@ -191,5 +242,12 @@
   <script type="module" src="/assets/js/animation-editor.js"></script>
   <script src="/assets/js/audio-editor.js"></script>
   <script src="/assets/js/profiler.js"></script>
+  <!-- File Manager: uses the vendored highlight.js loaded above for its
+       code-view tabs, plus marked (Markdown) and KaTeX (LaTeX math) for
+       rendering markup files in Preview mode, so it's included after all
+       three. -->
+  <script src="/assets/js/vendor/marked/marked.min.js"></script>
+  <script src="/assets/js/vendor/katex/katex.min.js"></script>
+  <script src="/assets/js/forge-filemanager.js"></script>
 </body>
 </html>

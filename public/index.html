@@ -188,10 +188,10 @@
                             <h3>Change password</h3>
                             <form class="forge-settings-form" id="changePasswordForm">
                                 <label class="forge-field">Current password
-                                    <input id="currentPassword" name="currentPassword" type="password" required autocomplete="current-password">
+                                    <input id="currentPassword" placeholder="Current password" name="currentPassword" type="password" required autocomplete="current-password">
                                 </label>
                                 <label class="forge-field">New password
-                                    <input id="newPassword" name="newPassword" type="password" required minlength="8" autocomplete="new-password">
+                                    <input id="newPassword" name="newPassword" placeholder="New password" type="password" required minlength="8" autocomplete="new-password">
                                 </label>
                                 <p class="forge-form-error" id="changePasswordError" role="alert"></p>
                                 <p class="forge-form-success" id="changePasswordSuccess"></p>
@@ -227,6 +227,7 @@
         </form>
     </dialog>
     <script src="/assets/js/forge-dialogs.js"></script>
+    <script src="/assets/js/theme-manager.js"></script>
     <script src="/assets/js/dashboard.js"></script>
 </body>
 </html>

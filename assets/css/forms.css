@@ -159,6 +159,7 @@ select.fc-sm {
 
 input[type="number"] {
   padding-right: 6px;
+  appearance: textfield;
   -moz-appearance: textfield;
 }
 input[type="number"]::-webkit-inner-spin-button,
@@ -179,7 +180,7 @@ input[type="number"]:focus::-webkit-outer-spin-button {
 /* A no-spinner variant for tight layouts (mixer strips, coordinate rows) */
 input[type="number"].fc-plain::-webkit-inner-spin-button,
 input[type="number"].fc-plain::-webkit-outer-spin-button { opacity: 0 !important; }
-input[type="number"].fc-plain { -moz-appearance: textfield; }
+input[type="number"].fc-plain { appearance: textfield; -moz-appearance: textfield; }
 
 /* -----------------------------------------------------------------------
    Range slider — horizontal (the common case) and vertical (mixer-style
@@ -432,7 +433,4 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 3px; }
 .fc-row { display: flex; align-items: center; gap: 8px; }
 .fc-checkbox-row { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
 
-
-.switch input[type="checkbox"]{
-  display: none;
-}
+.switch input[type="checkbox"]{display:none;}

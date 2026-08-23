@@ -8,8 +8,11 @@ const {
   createGame, listGames, readGame, deleteGame,
   listScenes, readScene, createScene, deleteScene, saveScene,
   listAssets, listAssetsDetailed, uploadAsset, deleteAsset, updateAsset, findAsset,
+  readProjectSettings, updateProjectSettings,
   readMultiplayerSettings, updateMultiplayerSettings, writeMultiplayerConnectInfo,
-  readPublicGameInfo, submitStat, readLeaderboard
+  readPublicGameInfo, submitStat, readLeaderboard,
+  listFileTree, createFileEntry, renameFileEntry, deleteFileEntry,
+  readFileText, writeFileText, statFileEntry, importFiles, exportFileOrFolder
 } = require("../src/game-manager");
 const {
   SESSION_COOKIE,
@@ -24,6 +27,7 @@ const {
 const multiplayerHub = require("./multiplayer-hub");
 const tunnel = require("./tunnel");
 const playerManager = require("../src/player-manager");
+const { readThemeSettings, setActiveTheme, addCustomTheme, deleteCustomTheme } = require("../src/theme-manager");
 
 const app = express();
 const ROOT = path.resolve(__dirname, "..");
@@ -35,12 +39,24 @@ const PORT = Number(process.env.PORT) || 4173;
 const HOST = process.env.HOST || "127.0.0.1";
 
 app.disable("x-powered-by");
-app.use(express.json({ limit: "20mb" }));
+// Each project can raise its own per-asset upload cap up to 100MB in Project
+// Settings (src/game-manager.js's MAX_MAX_ASSET_MB) — this global body-parser
+// limit is the outer bound every request has to fit under regardless of that
+// per-project setting, so it needs headroom over 100MB for base64's ~1.37x
+// encoding overhead, plus room for the File Manager's multi-file/folder
+// import (several base64 `dataUrl`s batched into one JSON body).
+app.use(express.json({ limit: "150mb" }));
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "same-origin");
   res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; script-src-attr 'none'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  // img-src allows blob: alongside 'self'/data: — Three.js's GLTFLoader
+  // decodes embedded glTF/GLB textures by turning them into a Blob and
+  // loading that via an <img> (blob:...) rather than a data: URL, so the
+  // model viewer/editor's texture loading needs it. blob: URLs are only
+  // ever created by our own script from in-memory data (never a remote
+  // origin), so this doesn't open the door to loading third-party images.
+  res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; script-src-attr 'none'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
   next();
 });
 
@@ -164,6 +180,29 @@ app.post("/api/account/change-password", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Theme: device-wide (not per-project) preset/custom theme selection, read
+// and written from the editor's Edit menu → "Editor Settings…" panel (see
+// assets/js/theme-manager.js and theme-manager-panel.js).
+app.get("/api/theme", async (_req, res, next) => {
+  try { res.json(await readThemeSettings(ROOT)); }
+  catch (error) { next(error); }
+});
+
+app.put("/api/theme/active", async (req, res, next) => {
+  try { res.json(await setActiveTheme(ROOT, req.body?.themeId)); }
+  catch (error) { next(error); }
+});
+
+app.post("/api/theme/custom", async (req, res, next) => {
+  try { res.status(201).json(await addCustomTheme(ROOT, req.body || {})); }
+  catch (error) { next(error); }
+});
+
+app.delete("/api/theme/custom/:id", async (req, res, next) => {
+  try { res.json(await deleteCustomTheme(ROOT, req.params.id)); }
+  catch (error) { next(error); }
+});
+
 app.get("/api/games", async (_req, res, next) => {
   try { res.json({ games: await listGames(ROOT) }); } catch (error) { next(error); }
 });
@@ -218,6 +257,19 @@ app.delete("/api/games/:slug/scenes/:sceneId", async (req, res, next) => {
 // Backward-compatible single-scene route, defaults to the "main" scene.
 app.put("/api/games/:slug/scene", async (req, res, next) => {
   try { res.json({ scene: await saveScene(ROOT, req.params.slug, "main", req.body || {}) }); }
+  catch (error) { next(error); }
+});
+
+// Project settings: name, canvas size/background, and per-project upload
+// cap — read and written from the editor's Project menu → "Project
+// Settings…" panel (see assets/js/project-settings-panel.js).
+app.get("/api/games/:slug/settings", async (req, res, next) => {
+  try { res.json({ settings: await readProjectSettings(ROOT, req.params.slug) }); }
+  catch (error) { next(error); }
+});
+
+app.put("/api/games/:slug/settings", async (req, res, next) => {
+  try { res.json({ settings: await updateProjectSettings(ROOT, req.params.slug, req.body || {}) }); }
   catch (error) { next(error); }
 });
 
@@ -309,6 +361,72 @@ app.get("/api/games/:slug/assets/:assetId/file", async (req, res, next) => {
     const { meta, filePath } = await findAsset(ROOT, req.params.slug, req.params.assetId);
     res.setHeader("Content-Type", meta.mime || "application/octet-stream");
     res.sendFile(filePath);
+  } catch (error) { next(error); }
+});
+
+// File Manager: a general-purpose, nested folder/file tree per game, kept
+// under games/<slug>/files/ — see the "File Manager" section of
+// src/game-manager.js for how this differs from assets/scenes/src.
+app.get("/api/games/:slug/files", async (req, res, next) => {
+  try { res.json({ tree: await listFileTree(ROOT, req.params.slug) }); }
+  catch (error) { next(error); }
+});
+
+app.post("/api/games/:slug/files", async (req, res, next) => {
+  try { res.status(201).json({ entry: await createFileEntry(ROOT, req.params.slug, req.body || {}) }); }
+  catch (error) { next(error); }
+});
+
+app.put("/api/games/:slug/files/rename", async (req, res, next) => {
+  try { res.json({ entry: await renameFileEntry(ROOT, req.params.slug, req.body || {}) }); }
+  catch (error) { next(error); }
+});
+
+app.delete("/api/games/:slug/files", async (req, res, next) => {
+  try { res.json(await deleteFileEntry(ROOT, req.params.slug, req.query.path)); }
+  catch (error) { next(error); }
+});
+
+app.get("/api/games/:slug/files/content", async (req, res, next) => {
+  try { res.json(await readFileText(ROOT, req.params.slug, req.query.path)); }
+  catch (error) { next(error); }
+});
+
+app.put("/api/games/:slug/files/content", async (req, res, next) => {
+  try { res.json(await writeFileText(ROOT, req.params.slug, req.body || {})); }
+  catch (error) { next(error); }
+});
+
+app.post("/api/games/:slug/files/import", async (req, res, next) => {
+  try { res.status(201).json(await importFiles(ROOT, req.params.slug, req.body || {})); }
+  catch (error) { next(error); }
+});
+
+// Inline preview (image <img>, video/audio <source>, etc.) — no
+// Content-Disposition, so the browser renders it instead of downloading it.
+app.get("/api/games/:slug/files/raw", async (req, res, next) => {
+  try {
+    const { abs, mime } = await statFileEntry(ROOT, req.params.slug, req.query.path);
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(abs);
+  } catch (error) { next(error); }
+});
+
+// Export: a single file downloads as-is; a folder downloads as a .zip
+// built on the fly (see exportFileOrFolder / src/zip-writer.js).
+app.get("/api/games/:slug/files/export", async (req, res, next) => {
+  try {
+    const result = await exportFileOrFolder(ROOT, req.params.slug, req.query.path || "");
+    if (result.kind === "file") {
+      res.setHeader("Content-Type", result.mime);
+      res.setHeader("Content-Disposition", `attachment; filename="${result.name.replace(/"/g, "")}"`);
+      res.sendFile(result.abs);
+    } else {
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${result.name.replace(/"/g, "")}"`);
+      res.send(result.buffer);
+    }
   } catch (error) { next(error); }
 });
 

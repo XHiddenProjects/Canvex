@@ -56,7 +56,10 @@
     tracks: [],           // { id, name, buffer, startTime, gain, pan, muted, solo, color, prevBuffer }
     selectedId: null,
     playing: false,
-    playStart: 0,
+    playStart: 0,       // ctx.currentTime when the current playback run began
+    positionAtStart: 0, // timeline position (s) that playStart corresponds to
+    position: 0,        // current timeline position (s) — kept up to date whether playing or paused, so Play resumes instead of restarting
+    playSession: 0,     // bumped on every playFrom() call, so a stale "ended" event from a previous play/pause cycle can't affect the current one
     sources: [],
     analysers: {},         // id -> { node, meterEl } while playing
     masterAnalyser: null,
@@ -294,7 +297,15 @@
   }
 
   function positionOverlays(width) {
-    const w = width || layoutTimeline();
+    // Read the current width, don't recompute layout here: layoutTimeline()
+    // assigns ruler.width/ruler.height, and reassigning either property on a
+    // <canvas> wipes whatever was drawn on it. positionOverlays() is called
+    // every animation frame while playing (see the tick() loop in playFrom),
+    // so calling layoutTimeline() from here was clearing the ruler's tick
+    // marks ~60x/sec and never redrawing them, leaving the ruler blank.
+    // Actual layout changes (zoom, new tracks, timeline length) already go
+    // through renderRows(), which calls layoutTimeline()+drawRuler() itself.
+    const w = width || parseInt(timelineInner.style.width, 10) || timelineWrap.clientWidth;
     const h = rowsEl.offsetHeight || (audio.tracks.length * ROW_H);
     selectionEl.style.height = `${h}px`;
     playheadEl.style.height = `${h}px`;
@@ -304,11 +315,11 @@
       selectionEl.style.left = `${sx}px`;
       selectionEl.style.width = `${Math.max(1, ex - sx)}px`;
     } else selectionEl.style.display = 'none';
-    if (audio.playing) {
-      const elapsed = audio.ctx.currentTime - audio.playStart;
-      playheadEl.style.display = 'block';
-      playheadEl.style.left = `${Math.max(0, elapsed) * pps()}px`;
-    } else playheadEl.style.display = 'none';
+    // Always show the playhead (while playing, paused, or scrubbed to a
+    // spot) — currentPosition() already resolves to the right place either
+    // way, so there's no reason to hide it just because playback is paused.
+    playheadEl.style.display = 'block';
+    playheadEl.style.left = `${Math.max(0, currentPosition()) * pps()}px`;
   }
 
   // ---- range selection drag (on empty lane space) vs. clip drag (retiming a clip) ----
@@ -496,11 +507,25 @@
   async function synthesizeInstrument(key, freq, dur) {
     const c = ensureCtx(); if (!c) return null;
     const preset = INSTRUMENT_PRESETS[key];
-    const noteDur = preset.fixedDur || dur;
+    // Always honor the Duration field the user set — it used to be silently
+    // thrown away for every percussion preset (kick/tom/snare/clap/hihat/
+    // cymbal/marimba/bell all define fixedDur), so changing the field had no
+    // audible effect on those. `fixedDur` is now only a reference length:
+    // `drumStretch` scales each percussion synth's internal noise-burst/
+    // sweep timing (which are otherwise hardcoded to that reference length)
+    // so a longer requested duration actually produces a longer hit rather
+    // than the same hit plus silent padding.
+    const noteDur = dur;
+    const drumStretch = preset.fixedDur ? Math.max(0.15, noteDur / preset.fixedDur) : 1;
     const totalDur = noteDur + preset.release + 0.05;
     const off = new OfflineAudioContext(1, Math.ceil(c.sampleRate * totalDur), c.sampleRate);
     const master = off.createGain();
-    applyADSR(master.gain, preset, noteDur);
+    // Percussion's amplitude decay is also part of the "hit length", so it
+    // has to scale with drumStretch too — otherwise the sweep/noise content
+    // above gets longer while the volume envelope still cuts it off at the
+    // old fixed decay time.
+    const envPreset = drumStretch !== 1 ? { ...preset, decay: preset.decay * drumStretch } : preset;
+    applyADSR(master.gain, envPreset, noteDur);
     master.connect(off.destination);
 
     function addVibrato(osc, rate, depthCents) {
@@ -561,11 +586,11 @@
     } else if (preset.synth === 'sweep') {
       const osc = off.createOscillator(); osc.type = 'sine';
       osc.frequency.setValueAtTime(preset.startFreq, 0);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(20, preset.endFreq), preset.decay);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(20, preset.endFreq), preset.decay * drumStretch);
       osc.connect(master);
       osc.start(0); osc.stop(totalDur);
     } else if (preset.synth === 'noiseTone') {
-      const nb = off.createBuffer(1, Math.floor(off.sampleRate * 0.3), off.sampleRate);
+      const nb = off.createBuffer(1, Math.max(1, Math.floor(off.sampleRate * 0.3 * drumStretch)), off.sampleRate);
       const nd = nb.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
       const ns = off.createBufferSource(); ns.buffer = nb;
       const bp = off.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = preset.toneFreq; bp.Q.value = 1.2;
@@ -574,7 +599,7 @@
       const tg = off.createGain(); tg.gain.value = 0.3;
       tone.connect(tg).connect(master); tone.start(0); tone.stop(totalDur);
     } else if (preset.synth === 'noiseHP') {
-      const nb = off.createBuffer(1, Math.floor(off.sampleRate * 0.2), off.sampleRate);
+      const nb = off.createBuffer(1, Math.max(1, Math.floor(off.sampleRate * 0.2 * drumStretch)), off.sampleRate);
       const nd = nb.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
       const ns = off.createBufferSource(); ns.buffer = nb;
       const hp = off.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6000;
@@ -582,13 +607,16 @@
     } else if (preset.synth === 'clapBurst') {
       // A handclap is several quick noise bursts, not one — layering a
       // few short bandpassed bursts at small offsets sells the "clap"
-      // texture far better than a single noise hit.
-      [0, 0.02, 0.04, 0.07].forEach(delay => {
-        const nb = off.createBuffer(1, Math.floor(off.sampleRate * 0.08), off.sampleRate);
+      // texture far better than a single noise hit. Offsets/burst lengths
+      // scale with drumStretch so a longer requested duration spreads the
+      // bursts out (and lengthens each one) instead of doing nothing.
+      [0, 0.02, 0.04, 0.07].map(t => t * drumStretch).forEach(delay => {
+        const burstLen = 0.08 * drumStretch;
+        const nb = off.createBuffer(1, Math.max(1, Math.floor(off.sampleRate * burstLen)), off.sampleRate);
         const nd = nb.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
         const ns = off.createBufferSource(); ns.buffer = nb;
         const bp = off.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1;
-        const g = off.createGain(); g.gain.setValueAtTime(0.8, delay); g.gain.exponentialRampToValueAtTime(0.001, delay + 0.05);
+        const g = off.createGain(); g.gain.setValueAtTime(0.8, delay); g.gain.exponentialRampToValueAtTime(0.001, delay + burstLen * 0.6);
         ns.connect(bp).connect(g).connect(master);
         ns.start(delay);
       });
@@ -618,37 +646,66 @@
     const totalDur = dur + 0.25;
     const off = new OfflineAudioContext(1, Math.ceil(c.sampleRate * totalDur), c.sampleRate);
 
-    // Glottal-ish source: a sawtooth (harmonically rich, like real vocal
-    // folds) with vibrato + a touch of faster pitch jitter (real voices
-    // are never perfectly steady), then gently low-passed to round off
-    // the source's natural spectral roll-off before it hits the
-    // formants — a raw sawtooth alone sounds buzzy/electronic.
-    const src = off.createOscillator(); src.type = 'sawtooth'; src.frequency.value = freq;
+    // Small per-generation randomization — a real voice never repeats a
+    // note with bit-identical vibrato/pitch/timbre, and generating the
+    // "same" vowel twice in a row sounding perfectly identical is a big
+    // part of what reads as robotic rather than human.
+    const rand = (spread) => 1 + (Math.random() * 2 - 1) * spread;
 
-    const vibrato = off.createOscillator(); vibrato.type = 'sine'; vibrato.frequency.value = 5.5;
+    // Glottal-ish source: TWO slightly detuned sawtooths (real vocal folds
+    // aren't a single perfect oscillator — a touch of unison detune is what
+    // gives a voice body/chorus instead of a thin, dead-flat buzz), with
+    // vibrato + faster pitch jitter (voices are never perfectly steady),
+    // then low-passed to round off the source's spectral roll-off before it
+    // hits the formants.
+    const detuneCents = 5 * rand(0.4);
+    const srcA = off.createOscillator(); srcA.type = 'sawtooth'; srcA.frequency.value = freq; srcA.detune.value = -detuneCents;
+    const srcB = off.createOscillator(); srcB.type = 'sawtooth'; srcB.frequency.value = freq; srcB.detune.value = detuneCents;
+    const srcMix = off.createGain(); srcMix.gain.value = 0.5;
+    srcA.connect(srcMix); srcB.connect(srcMix);
+
+    const vibrato = off.createOscillator(); vibrato.type = 'sine'; vibrato.frequency.value = 5.5 * rand(0.15);
     const vibratoGain = off.createGain();
     vibratoGain.gain.setValueAtTime(0, 0);
-    vibratoGain.gain.linearRampToValueAtTime(22, 0.18); // vibrato fades in, like a real sustained note
-    vibrato.connect(vibratoGain).connect(src.detune);
+    vibratoGain.gain.linearRampToValueAtTime(22 * rand(0.25), 0.18); // vibrato fades in, like a real sustained note
+    vibrato.connect(vibratoGain);
+    vibratoGain.connect(srcA.detune); vibratoGain.connect(srcB.detune);
     vibrato.start(0); vibrato.stop(totalDur);
 
-    const jitter = off.createOscillator(); jitter.type = 'sine'; jitter.frequency.value = 9.2;
-    const jitterGain = off.createGain(); jitterGain.gain.value = 4;
-    jitter.connect(jitterGain).connect(src.detune);
+    const jitter = off.createOscillator(); jitter.type = 'sine'; jitter.frequency.value = 9.2 * rand(0.2);
+    const jitterGain = off.createGain(); jitterGain.gain.value = 4 * rand(0.4);
+    jitter.connect(jitterGain);
+    jitterGain.connect(srcA.detune); jitterGain.connect(srcB.detune);
     jitter.start(0); jitter.stop(totalDur);
 
-    const sourceTilt = off.createBiquadFilter(); sourceTilt.type = 'lowpass'; sourceTilt.frequency.value = 3200; sourceTilt.Q.value = 0.5;
-    src.connect(sourceTilt);
+    // A slow, very gentle pitch drift on top of vibrato/jitter — real
+    // sustained notes wander slightly rather than locking dead-on-pitch.
+    const drift = off.createOscillator(); drift.type = 'sine'; drift.frequency.value = 0.6 + Math.random() * 0.5;
+    const driftGain = off.createGain(); driftGain.gain.value = 3 * rand(0.5);
+    drift.connect(driftGain);
+    driftGain.connect(srcA.detune); driftGain.connect(srcB.detune);
+    drift.start(0); drift.stop(totalDur);
+
+    // Raised from 3200Hz: the higher formants that carry a lot of a
+    // vowel's identity (F3–F5, up to ~4500Hz in these presets — see "ee"
+    // and "oh" below) were being choked off by a cutoff that sat right in
+    // the middle of that range, so different vowels only really differed
+    // in their low formant and ended up sounding a lot more alike than
+    // they were designed to.
+    const sourceTilt = off.createBiquadFilter(); sourceTilt.type = 'lowpass'; sourceTilt.frequency.value = 6500; sourceTilt.Q.value = 0.5;
+    srcMix.connect(sourceTilt);
 
     const master = off.createGain();
     applyADSR(master.gain, { attack: 0.04, decay: 0.06, sustain: 0.82, release: 0.18 }, dur);
     const brightness = off.createBiquadFilter(); brightness.type = 'highshelf'; brightness.frequency.value = 3500; brightness.gain.value = 3;
     master.connect(brightness).connect(off.destination);
 
-    // Five-formant bank (F1–F5) run in parallel off the same source —
-    // this is what actually carries the vowel's identity.
+    // Five-formant bank (F1–F5) run in parallel off the same source — this
+    // is what actually carries the vowel's identity. Each formant's center
+    // frequency gets a tiny (~1.5%) random nudge per generation so the
+    // resonance isn't a perfectly identical, laser-precise peak every time.
     preset.formants.forEach(f => {
-      const bp = off.createBiquadFilter(); bp.type = 'peaking'; bp.frequency.value = f.freq; bp.Q.value = f.q; bp.gain.value = f.gain;
+      const bp = off.createBiquadFilter(); bp.type = 'peaking'; bp.frequency.value = f.freq * rand(0.015); bp.Q.value = f.q; bp.gain.value = f.gain;
       sourceTilt.connect(bp).connect(master);
     });
 
@@ -662,7 +719,8 @@
     ns.connect(breathFilter).connect(breathGain).connect(master);
     ns.start(0);
 
-    src.start(0); src.stop(totalDur);
+    srcA.start(0); srcA.stop(totalDur);
+    srcB.start(0); srcB.stop(totalDur);
     return await off.startRendering();
   }
 
@@ -928,15 +986,20 @@
     toast('Undid last effect');
   });
 
-  // ---- import from asset library ----
+  // ---- import from the project's File Manager ----
   el('#audImport').addEventListener('click', async () => {
     if (!state.slug) { toast('No project loaded'); return; }
-    try {
-      const assets = await api(`/api/games/${encodeURIComponent(state.slug)}/assets`);
-      const audioAssets = (assets.assets || assets || []).filter(a => a.category === 'audio');
-      if (!audioAssets.length) { toast('No audio assets found in this project'); return; }
-      window.__forgeOpenPicker ? window.__forgeOpenPicker(audioAssets, pickAsset) : pickAsset(audioAssets[0]);
-    } catch (error) { toast('Could not load assets: ' + error.message); }
+    // Opens the real File Manager picker (same one the Assets panel's
+    // Import button uses) instead of the previous non-existent
+    // window.__forgeOpenPicker. multiple/directory mirror a native
+    // <input type=file>'s attributes: allow picking several files at
+    // once, but only files, not whole folders.
+    const paths = await window.__forgeOpenFilePicker?.({ multiple: true, directory: false, accepts: 'audio/*' });
+    if (!paths || !paths.length) return;
+    for (const path of paths) {
+      const name = path.split('/').pop();
+      await pickAsset({ name, url: `/api/games/${encodeURIComponent(state.slug)}/files/raw?path=${encodeURIComponent(path)}` });
+    }
   });
   async function pickAsset(asset) {
     const c = ensureCtx(); if (!c) return;
@@ -994,43 +1057,134 @@
   });
 
   // ---- playback (routes through per-track gain/pan + master, with VU meters) ----
-  function stopAll() {
-    audio.sources.forEach(s => { try { s.stop(); } catch {} });
+  // currentPosition() / stopSources() only touch the live Web Audio graph;
+  // audio.position (the timeline scrub position) is updated by whoever
+  // calls them, so pausing vs. stopping-and-resetting can share the code
+  // that tears down the currently-playing sources.
+  function currentPosition() {
+    if (!audio.playing || !audio.ctx) return audio.position;
+    return audio.positionAtStart + (audio.ctx.currentTime - audio.playStart);
+  }
+  function stopSources() {
+    // Detach onended first — otherwise forcing a stop here (pause/seek/replay)
+    // would fire the "natural end" handlers attached in playFrom() and race
+    // with whatever play run replaces this one.
+    audio.sources.forEach(s => { try { s.onended = null; s.stop(); } catch {} });
     audio.sources = [];
     audio.analysers = {};
+  }
+  // Pauses in place: remembers exactly where playback was so the next
+  // Play resumes from there instead of restarting the whole arrangement.
+  function pauseAll() {
+    if (!audio.playing) return;
+    audio.position = currentPosition();
+    stopSources();
     audio.playing = false;
     el('#audPlay').textContent = '▶ Play';
     positionOverlays();
   }
-  el('#audPlay').addEventListener('click', () => {
+  // Full stop: pauses and also rewinds the playhead back to 0.
+  function stopAll() {
+    pauseAll();
+    audio.position = 0;
+    positionOverlays();
+  }
+  // Starts (or resumes) playback from `fromTime` on the timeline. Each
+  // track is scheduled relative to that offset: tracks already finished
+  // before it are skipped, tracks mid-way through start with a buffer
+  // offset so they pick up mid-clip, and tracks that haven't started yet
+  // are scheduled with the right lead delay.
+  function playFrom(fromTime) {
     const c = ensureCtx(); if (!c) return;
-    if (audio.playing) { stopAll(); return; }
+    stopSources();
     const anySolo = audio.tracks.some(t => t.solo);
-    let played = false, maxDur = 0;
+    const mySession = ++audio.playSession;
+    let played = false, remaining = 0, lastSources = [];
     const startAt = c.currentTime + 0.05; // small lead-in so every track's scheduled start lands cleanly
     audio.tracks.forEach(t => {
       if (!t.buffer || t.muted || (anySolo && !t.solo)) return;
+      const clipEnd = t.startTime + t.buffer.duration;
+      if (clipEnd <= fromTime) return; // this clip already finished before the resume point
       const src = c.createBufferSource(); src.buffer = t.buffer;
       const gain = c.createGain(); gain.gain.value = t.gain;
       const analyser = c.createAnalyser(); analyser.fftSize = 64;
       const panner = c.createStereoPanner ? c.createStereoPanner() : null;
       if (panner) { panner.pan.value = t.pan; src.connect(gain).connect(panner).connect(analyser).connect(audio.master); }
       else src.connect(gain).connect(analyser).connect(audio.master);
-      src.start(startAt + t.startTime);
+      if (t.startTime >= fromTime) {
+        src.start(startAt + (t.startTime - fromTime));
+      } else {
+        src.start(startAt, fromTime - t.startTime);
+      }
       audio.sources.push(src);
       audio.analysers[t.id] = { node: analyser };
-      maxDur = Math.max(maxDur, t.startTime + t.buffer.duration);
+      // Track whichever clip(s) finish last — those are the ones whose
+      // natural "ended" event should trigger the auto-stop below.
+      const trackRemaining = clipEnd - fromTime;
+      if (trackRemaining > remaining) { remaining = trackRemaining; lastSources = [src]; }
+      else if (trackRemaining === remaining) { lastSources.push(src); }
       played = true;
     });
-    if (!played) { toast('No audible tracks (check mute/solo)'); return; }
-    audio.playing = true; audio.playStart = startAt;
+    if (!played) { toast(fromTime > 0 ? 'Nothing left to play from here' : 'No audible tracks (check mute/solo)'); return; }
+    audio.playing = true;
+    audio.playStart = startAt;
+    audio.positionAtStart = fromTime;
     el('#audPlay').textContent = '⏸ Pause';
-    setTimeout(() => { if (audio.playing) stopAll(); }, maxDur * 1000 + 100);
+    // Auto-stop when playback actually finishes, using the real "ended"
+    // event from the longest-running source(s) rather than a wall-clock
+    // setTimeout. A setTimeout guesses the end time in advance and its
+    // clock can drift from the AudioContext's own audio-hardware clock —
+    // on longer imported songs that drift adds up enough to force-stop
+    // (cut off) the last second or so of the track before it's actually
+    // done playing. Listening for the real event means we only ever stop
+    // exactly when the audio itself stops.
+    let endedCount = 0;
+    lastSources.forEach(src => {
+      src.onended = () => {
+        // Ignore stale events from a play run that's since been paused,
+        // seeked, or replaced by a newer one.
+        if (audio.playSession !== mySession || !audio.playing) return;
+        endedCount++;
+        if (endedCount >= lastSources.length) stopAll();
+      };
+    });
     const tick = () => { if (!audio.playing) return; positionOverlays(); requestAnimationFrame(tick); };
     tick();
     tickMeters();
+  }
+  el('#audPlay').addEventListener('click', () => {
+    if (audio.playing) { pauseAll(); return; }
+    playFrom(audio.position || 0);
   });
   el('#audStop').addEventListener('click', stopAll);
+
+  // ---- seek: click the ruler, or grab-and-drag the red playhead ----
+  let scrubbing = null; // { wasPlaying }
+  function timeAtClientX(clientX) {
+    const rect = timelineInner.getBoundingClientRect();
+    return Math.max(0, (clientX - rect.left) / pps());
+  }
+  function beginScrub(clientX) {
+    scrubbing = { wasPlaying: audio.playing };
+    if (audio.playing) pauseAll();
+    playheadEl.classList.add('dragging');
+    seekPreview(clientX);
+  }
+  function seekPreview(clientX) {
+    audio.position = timeAtClientX(clientX);
+    playheadEl.style.display = 'block';
+    playheadEl.style.left = `${audio.position * pps()}px`;
+  }
+  playheadEl.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); beginScrub(e.clientX); });
+  ruler.addEventListener('mousedown', e => { e.preventDefault(); beginScrub(e.clientX); });
+  window.addEventListener('mousemove', e => { if (scrubbing) seekPreview(e.clientX); });
+  window.addEventListener('mouseup', () => {
+    if (!scrubbing) return;
+    const resume = scrubbing.wasPlaying;
+    scrubbing = null;
+    playheadEl.classList.remove('dragging');
+    if (resume) playFrom(audio.position);
+  });
 
   // ---- save to assets (WAV export) ----
   function bufferToWav(buffer) {

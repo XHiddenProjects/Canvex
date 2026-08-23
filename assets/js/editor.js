@@ -104,6 +104,28 @@
     return body;
   }
   window.__forgeApi = api;
+
+  // Same contract as api() (JSON in, JSON out, throws Error with .status on
+  // failure) but sent via XMLHttpRequest instead of fetch — fetch has no
+  // upload-progress event, so anything that wants a progress bar (asset
+  // uploads, File Manager imports) goes through this instead.
+  function apiUpload(url, { method = 'POST', body, onProgress } = {}) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, url);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
+      xhr.onerror = () => reject(Object.assign(new Error('Network error during upload'), { status: 0 }));
+      xhr.onload = () => {
+        let parsed = {};
+        try { parsed = JSON.parse(xhr.responseText || '{}'); } catch { /* non-JSON error page, e.g. a proxy's own 413 */ }
+        if (xhr.status >= 200 && xhr.status < 300) { onProgress?.(1); resolve(parsed); }
+        else reject(Object.assign(new Error(parsed.error || `Request failed (${xhr.status})`), { status: xhr.status }));
+      };
+      xhr.send(body);
+    });
+  }
+  window.__forgeApiUpload = apiUpload;
   window.__forgeToast = msg => toast(msg);
   window.__forgeLog = (level, message) => log(level, message);
   window.__forgeEscape = escapeHtml;
@@ -619,27 +641,42 @@
   async function uploadFiles(files) {
     if (!state.slug || !files.length) return;
     let overwritten = 0;
+    const errors = [];
+    const tracker = window.forgeUploadProgress?.begin(`Uploading ${files.length} asset${files.length === 1 ? '' : 's'}`);
     for (const file of files) {
+      const row = tracker?.addFile(file.name);
       try {
         const dataUrl = await readFileAsDataUrl(file);
-        const { asset } = await api(`/api/games/${encodeURIComponent(state.slug)}/assets`, {
+        const { asset } = await window.__forgeApiUpload(`/api/games/${encodeURIComponent(state.slug)}/assets`, {
           method: 'POST',
-          body: JSON.stringify({ name: file.name, category: categoryForMime(file.type), mime: file.type, dataUrl })
+          body: JSON.stringify({ name: file.name, category: categoryForMime(file.type), mime: file.type, dataUrl }),
+          onProgress: fraction => row?.progress(fraction)
         });
+        row?.done();
         if (asset?.overwritten) overwritten++;
-      } catch (error) { toast(`${file.name}: ${error.message}`); log('error', `Upload failed for ${file.name}: ${error.message}`); }
+      } catch (error) {
+        row?.error(error.message);
+        errors.push(`${file.name}: ${error.message}`);
+        log('error', `Upload failed for ${file.name}: ${error.message}`);
+      }
     }
+    tracker?.finish();
     await loadAssets(state.slug);
+    const successCount = files.length - errors.length;
     const suffix = overwritten ? ` (${overwritten} overwrote existing asset${overwritten === 1 ? '' : 's'})` : '';
-    toast(`${files.length} asset(s) imported${suffix}`);
+    if (successCount > 0) toast(`${successCount} asset(s) imported${suffix}`);
+    if (errors.length) await window.forgeAlert(errors.join('\n'), { title: errors.length === 1 ? 'Upload failed' : `${errors.length} uploads failed`, danger: true });
   }
   window.__forgeUploadFiles = uploadFiles;
 
-  const assetUploadInput = document.createElement('input');
-  assetUploadInput.type = 'file'; assetUploadInput.multiple = true; assetUploadInput.style.display = 'none';
-  document.body.appendChild(assetUploadInput);
-  assetUploadInput.onchange = () => uploadFiles([...assetUploadInput.files]);
-  $('#assetUploadBtn')?.addEventListener('click', () => assetUploadInput.click());
+  // The Assets panel's Import button opens the File Manager as a picker
+  // (multiple: true, directory: false — same as this input's old
+  // attributes) instead of the OS's native file dialog, so assets can be
+  // pulled from files already living in the project's File Manager tree.
+  $('#assetUploadBtn')?.addEventListener('click', async () => {
+    const paths = await window.__forgeOpenFilePicker?.({ multiple: true, directory: false });
+    if (paths && paths.length) await window.__forgeImportProjectFilesAsAssets?.(paths);
+  });
 
   const assetGridEl = $('#assetGrid');
   ['dragover', 'dragenter'].forEach(evt => assetGridEl?.addEventListener(evt, e => { e.preventDefault(); assetGridEl.classList.add('drag-over'); }));
@@ -705,7 +742,7 @@
   });
 
   const menus = {
-    File: [['New Project', 'Ctrl+N'], ['Open Project…', 'Ctrl+O'], ['Save Scene', 'Ctrl+S'], ['---', ''], ['Build Settings…', 'Ctrl+Shift+B'], ['Exit', 'Alt+F4']],
+    File: [['New Project', 'Ctrl+N'], ['Open Project…', 'Ctrl+O'], ['Save Scene', 'Ctrl+S'], ['---', ''], ['File Manager…', 'Ctrl+Shift+E'], ['Build Settings…', 'Ctrl+Shift+B'], ['Exit', 'Alt+F4']],
     Edit: [['Undo', 'Ctrl+Z'], ['Redo', 'Ctrl+Y'], ['---', ''], ['Duplicate', 'Ctrl+D'], ['Delete', 'Del'], ['Editor Settings…', '']],
     Assets: [['Import Asset…', ''], ['Create', '›'], ['Reimport All', '']],
     Scene: [['New Scene', ''], ['Save Scene', 'Ctrl+S'], ['Scene Settings…', '']],
@@ -1628,6 +1665,10 @@ forge.hooks.on('onTestStart', () => {
   const toast = msg => window.__forgeToast?.(msg);
   const selectBottom = name => document.querySelector(`#bottomTabs [data-bottom="${name}"]`)?.click();
   const download = (name, text, type = 'application/json') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
+  // Native OS file dialog — used only for "Open Project" (loading a
+  // project file from disk is inherently local-disk, unlike asset
+  // imports, which now go through the File Manager picker instead; see
+  // window.__forgeOpenFilePicker in forge-filemanager.js).
   const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.style.display = 'none'; document.body.appendChild(input);
   input.onchange = () => window.__forgeUploadFiles?.([...input.files]);
 
@@ -1635,18 +1676,19 @@ forge.hooks.on('onTestStart', () => {
     if (label === 'New Project' || label === 'New Scene') { state.objects = []; state.selectedId = null; state.dirty = true; $('#dirtyDot').style.visibility = 'visible'; $('#sceneSearch').dispatchEvent(new Event('input')); window.forgeRedraw3D?.(); toast('New empty scene created'); }
     else if (label.startsWith('Open Project')) input.click();
     else if (label === 'Save Scene') window.__forgeSaveScene?.();
+    else if (label.startsWith('File Manager')) window.__forgeOpenFileManager?.();
     else if (label.startsWith('Build Settings')) { selectBottom('profiler'); toast('Build settings opened in Profiler'); }
     else if (label === 'Exit') $('#closeEditor')?.click();
     else if (label === 'Undo') toast('Nothing to undo');
     else if (label === 'Redo') toast('Nothing to redo');
     else if (label === 'Duplicate') { const o = state.objects.find(x => x.id === state.selectedId); if (o) { const n = JSON.parse(JSON.stringify(o)); n.id = 'object-' + Date.now(); n.name += ' Copy'; n.position.x += 16; state.objects.push(n); state.selectedId = n.id; $('#sceneSearch').dispatchEvent(new Event('input')); window.forgeRedraw3D?.(); } else toast('Select an object to duplicate'); }
     else if (label === 'Delete') $('#deleteObject')?.click();
-    else if (label.startsWith('Editor Settings')) $('#debugToggle')?.click();
-    else if (label.startsWith('Import Asset')) input.click();
+    else if (label.startsWith('Editor Settings')) window.__forgeOpenThemeManagerPanel?.();
+    else if (label.startsWith('Import Asset')) { (async () => { const paths = await window.__forgeOpenFilePicker?.({ multiple: true, directory: false }); if (paths && paths.length) await window.__forgeImportProjectFilesAsAssets?.(paths); })(); }
     else if (label === 'Create') $('#addObject')?.click();
     else if (label === 'Reimport All') $('#assetSearch')?.dispatchEvent(new Event('input'));
     else if (label.startsWith('Scene Settings')) $('#inspectorMenu')?.click();
-    else if (label.startsWith('Project Settings')) $('#debugToggle')?.click();
+    else if (label.startsWith('Project Settings')) window.__forgeOpenProjectSettingsPanel?.();
     else if (label.startsWith('Multiplayer')) window.__forgeOpenMultiplayerPanel?.();
     else if (label.startsWith('Input Map')) { selectBottom('console'); toast('Input shortcuts are listed in Debug controls'); }
     else if (label.startsWith('Package Manager')) window.__forgeOpenPackageManager?.();

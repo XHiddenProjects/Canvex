@@ -334,17 +334,26 @@ button {
     padding: 0 7px;
     gap: 5px;
 }
-.search input {
+.search input,
+.search input:not([type]) {
     border: 0;
     outline: 0;
     background: transparent;
     min-width: 0;
     width: 100%;
+    height: 100%;
+    padding: 0;
+    border-radius: 0;
     color: #c9ccd1;
 }
 .search span {
     color: #7f858f;
     font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    flex: none;
 }
 .panel-toolbar > button {
     width: 28px;
@@ -806,7 +815,7 @@ button {
     width: 100%;
     height: 24px;
     margin-top: 3px;
-    background: #191b20;
+    background-color: #191b20;
     border: 1px solid #3b414a;
     border-radius: 3px;
     padding: 0 5px;
@@ -999,6 +1008,19 @@ button {
     height: 25px;
     color: #9298a1;
 }
+/* #assetUploadBtn carries a text label ("Upload"), not just a single glyph
+   like the grid/list view buttons next to it, so it can't share their fixed
+   27px icon-square sizing — that was squeezing "Upload" into a box too
+   narrow for it, wrapping the word onto its own line below the icon and
+   spilling it outside the button. */
+.asset-toolbar > button#assetUploadBtn {
+    width: auto;
+    padding: 0 9px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
 .asset-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
@@ -1073,7 +1095,7 @@ button {
 .forge-tool h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b909a; }
 .forge-tool button { color: #c7cad0; }
 .forge-tool button.active { background: #30353d; color: #fff; }
-.forge-tool input, .forge-tool select, .forge-tool textarea { background: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 4px 6px; font-size: 12px; }
+.forge-tool input, .forge-tool select, .forge-tool textarea { background-color: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 4px 6px; font-size: 12px; }
 .forge-tool textarea { font-family: "SFMono-Regular", Consolas, monospace; resize: vertical; }
 .forge-swatch { width: 22px; height: 22px; border-radius: 4px; border: 1px solid #3e444d; cursor: pointer; }
 .forge-swatch.active { outline: 2px solid var(--accent); }
@@ -1495,7 +1517,7 @@ button { cursor:pointer; }
 .layer-heading { padding:7px 9px; color:#e7e9ec; background:#191c21; border-bottom:1px solid #343941; font-weight:600; }
 .layer-heading small { float:right; color:#858c96; }
 .mini-tool { width:100%; height:100%; display:flex; align-items:center; justify-content:center; gap:12px; color:#b8bdc5; }
-.mini-tool button,.mini-tool select { min-height:28px; padding:0 10px; color:#d5d8dd; background:#30353d; border:1px solid #454b55; border-radius:3px; }
+.mini-tool button,.mini-tool select { min-height:28px; padding:0 10px; color:#d5d8dd; background-color:#30353d; border:1px solid #454b55; border-radius:3px; }
 .chrome-hidden .titlebar,.chrome-hidden .menubar,.chrome-hidden .toolbar { display:none; }
 .chrome-hidden .app { grid-template-rows:0 0 0 1fr; }
 
@@ -1757,7 +1779,7 @@ button { cursor:pointer; }
 /* ===== Animation editor ===== */
 .anim-editor { display: flex; flex-direction: column; width: 100%; height: 100%; color: #c7cad0; font-size: 12px; }
 .anim-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.anim-toolbar select, .anim-toolbar input, .anim-toolbar button { background: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
+.anim-toolbar select, .anim-toolbar input, .anim-toolbar button { background-color: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
 .anim-toolbar .grow { flex: 1; }
 .anim-toolbar button.primary { background: var(--accent, #e4813a); border-color: var(--accent2, #f2a35f); color: #fff; }
 .anim-body { flex: 1; min-height: 0; display: flex; }
@@ -1799,7 +1821,7 @@ button { cursor:pointer; }
 .audio-track-item.active { background: #2c3239; border-color: var(--line2, #424852); }
 .audio-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .audio-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.audio-toolbar select, .audio-toolbar input, .audio-toolbar button { background: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
+.audio-toolbar select, .audio-toolbar input, .audio-toolbar button { background-color: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
 .audio-toolbar button.primary { background: var(--accent, #e4813a); border-color: var(--accent2, #f2a35f); color: #fff; }
 .audio-toolbar .grow { flex: 1; }
 .audio-timeline-len-label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #9aa0aa; }
@@ -1809,7 +1831,7 @@ button { cursor:pointer; }
 .audio-gen-tabs { display: flex; gap: 3px; margin-bottom: 6px; }
 .audio-gen-tabs button { flex: 1; background: #14161a; border: 1px solid var(--line); color: #9aa0aa; border-radius: 4px; padding: 5px 4px; font-size: 11px; cursor: pointer; }
 .audio-gen-tabs button.active { background: var(--accent, #e4813a); border-color: var(--accent2, #f2a35f); color: #fff; }
-.audio-gen-panel select, .audio-gen-panel input { background: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
+.audio-gen-panel select, .audio-gen-panel input { background-color: #14161a; border: 1px solid var(--line); color: #e5e7eb; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
 .audio-gen-row { display: flex; gap: 4px; margin-top: 6px; }
 
 /* --- Effects rack --- */
@@ -1833,7 +1855,10 @@ button { cursor:pointer; }
 .audio-track-canvas { position: absolute; top: 16px; left: 0; height: 58px; }
 .audio-track-row-empty { display: flex; align-items: center; justify-content: center; color: #5c6270; font-size: 11.5px; height: 90px; }
 .audio-selection { position: absolute; top: 22px; background: rgba(65,166,246,0.14); border-left: 1px solid #41a6f6; border-right: 1px solid #41a6f6; pointer-events: none; display: none; z-index: 1; }
-.audio-playhead { position: absolute; top: 22px; width: 2px; background: #ff5d73; pointer-events: none; display: none; z-index: 3; }
+.audio-playhead { position: absolute; top: 22px; width: 2px; background: #ff5d73; pointer-events: auto; display: none; z-index: 3; cursor: ew-resize; }
+.audio-playhead::before { content: ''; position: absolute; top: 0; bottom: 0; left: -6px; width: 14px; } /* wider invisible hit area so the thin 2px line is easy to grab */
+.audio-playhead:hover, .audio-playhead.dragging { background: #ff8aa0; width: 3px; }
+.audio-ruler { cursor: pointer; }
 
 /* --- Mixing console --- */
 .audio-mixer { flex: 0 0 auto; border-top: 1px solid var(--line); display: flex; gap: 14px; padding: 10px 14px; overflow-x: auto; background: #17191d; }
@@ -2001,13 +2026,31 @@ button { cursor:pointer; }
   border-right: 1px solid var(--line);
   overflow: hidden;
 }
+.forge-code-editor__gutter {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 44px;
+  margin: 0;
+  padding: 10px 8px 10px 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  text-align: right;
+  color: #565b64;
+  background: #17191d;
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+  user-select: none;
+  white-space: pre;
+}
 .forge-code-editor__highlight,
 .forge-code-editor__input {
   position: absolute;
   inset: 0;
   margin: 0;
-  padding: 10px;
   border: 0;
+  border-radius: 0;
+  padding: 10px 10px 10px 54px;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12.5px;
   line-height: 1.55;
@@ -2037,6 +2080,66 @@ button { cursor:pointer; }
   opacity: 0.82;
 }
 
+/* Rendered Markdown/BBCode/LaTeX preview — shown instead of the raw-source
+   highlight+textarea pair while a markup file is in Preview mode. Plain
+   code files (.js/.json/...) have no "rendered" form, so they never use
+   this; they stay on the highlighted source view in both modes. */
+.forge-markup-preview {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 16px 20px;
+  overflow: auto;
+  color: #d6d9de;
+  font-size: 13px;
+  line-height: 1.6;
+  background: #14161a;
+}
+.forge-markup-preview h1, .forge-markup-preview h2, .forge-markup-preview h3,
+.forge-markup-preview h4, .forge-markup-preview h5, .forge-markup-preview h6 {
+  color: #f1f2f4; line-height: 1.3; margin: 1.1em 0 .5em;
+}
+.forge-markup-preview h1 { font-size: 1.9em; border-bottom: 1px solid var(--line); padding-bottom: .25em; }
+.forge-markup-preview h2 { font-size: 1.5em; border-bottom: 1px solid var(--line); padding-bottom: .2em; }
+.forge-markup-preview h3 { font-size: 1.25em; }
+.forge-markup-preview h4 { font-size: 1.1em; }
+.forge-markup-preview p { margin: .6em 0; }
+.forge-markup-preview a { color: #6db3f7; }
+.forge-markup-preview strong { color: #f1f2f4; }
+.forge-markup-preview code {
+  font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em;
+  background: #1e2126; border: 1px solid var(--line); border-radius: 3px; padding: .1em .35em;
+}
+.forge-markup-preview pre {
+  background: #1a1d22; border: 1px solid var(--line); border-radius: 6px;
+  padding: 10px 12px; overflow: auto; margin: .8em 0;
+}
+.forge-markup-preview pre code { background: none; border: 0; padding: 0; }
+.forge-markup-preview blockquote {
+  margin: .8em 0; padding: .3em 1em; border-left: 3px solid #41a6f6;
+  color: #a9adb4; background: rgba(65,166,246,0.06);
+}
+.forge-markup-preview ul, .forge-markup-preview ol { margin: .6em 0; padding-left: 1.6em; }
+.forge-markup-preview li { margin: .25em 0; }
+.forge-markup-preview img { max-width: 100%; border-radius: 4px; }
+.forge-markup-preview hr { border: 0; border-top: 1px solid var(--line); margin: 1.4em 0; }
+.forge-markup-preview table { border-collapse: collapse; margin: .8em 0; }
+.forge-markup-preview th, .forge-markup-preview td { border: 1px solid var(--line); padding: 5px 10px; }
+.forge-markup-preview th { background: #1a1d22; color: #f1f2f4; }
+/* BBCode-only tags */
+.forge-markup-preview .bb-size-1 { font-size: .75em; } .forge-markup-preview .bb-size-2 { font-size: .9em; }
+.forge-markup-preview .bb-size-3 { font-size: 1em; } .forge-markup-preview .bb-size-4 { font-size: 1.15em; }
+.forge-markup-preview .bb-size-5 { font-size: 1.35em; } .forge-markup-preview .bb-size-6 { font-size: 1.6em; }
+.forge-markup-preview .bb-center { text-align: center; }
+.forge-markup-preview .bb-spoiler-body { display: none; border: 1px dashed var(--line); border-radius: 4px; padding: 8px; margin: .4em 0; }
+.forge-markup-preview .bb-spoiler.open .bb-spoiler-body { display: block; }
+.forge-markup-preview .bb-spoiler-toggle { cursor: pointer; color: #6db3f7; user-select: none; }
+.forge-markup-preview .katex-display { margin: .8em 0; overflow-x: auto; overflow-y: hidden; }
+.forge-markup-preview .forge-markup-error {
+  color: #f2a35f; background: rgba(228,123,53,0.08); border: 1px solid rgba(228,123,53,0.3);
+  border-radius: 4px; padding: 8px 10px; font-size: 12px; margin-bottom: 10px;
+}
+
 /*
  * Shader Editor: Code/Visual mode toggle + node-graph canvas. The node
  * cards, pins and wires reuse the `.fbe-*` classes from the Block Editor
@@ -2047,3 +2150,580 @@ button { cursor:pointer; }
 .sh-mode-toggle button { flex: 1; background: transparent; border: 0; border-radius: 4px; padding: 5px 6px; font-size: 11px; color: #9298a1; }
 .sh-mode-toggle button.active { background: #30353d; color: #fff; }
 .sh-canvas.fbe-canvas { min-width: 1200px; min-height: 700px; }
+
+/* ===================================================================
+ * File Manager — popup browser (create/rename/delete/import/export
+ * files & folders) + the in-viewport file tabs it opens files into.
+ * =================================================================== */
+.fm-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 9, 11, 0.72);
+    backdrop-filter: blur(2px);
+    z-index: 700;
+    align-items: center;
+    justify-content: center;
+    padding: 26px;
+}
+.fm-overlay.show { display: flex; }
+.fm-modal {
+    width: 100%;
+    height: 100%;
+    max-width: 1080px;
+    max-height: 720px;
+    background: var(--panel);
+    border: 1px solid var(--line2);
+    border-radius: 10px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .55);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.fm-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #21252b, #1c2025);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+}
+.fm-head .fm-icon { font-size: 14px; opacity: .85; }
+.fm-head strong { font-size: 12.5px; letter-spacing: .02em; white-space: nowrap; }
+.fm-head .spacer { flex: 1; }
+.fm-breadcrumbs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #9aa0ab;
+    font-size: 11.5px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.fm-breadcrumbs button {
+    color: #b9bec6;
+    padding: 2px 4px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+.fm-breadcrumbs button:hover { background: #30353d; color: #fff; }
+.fm-breadcrumbs button:last-child { color: #fff; font-weight: 600; }
+.fm-breadcrumbs .fm-crumb-sep { opacity: .5; }
+.fm-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+    padding: 0 9px;
+    font-size: 11px;
+    color: #d7d9dd;
+    background: #2c3037;
+    border: 1px solid #3a3f49;
+    border-radius: 5px;
+    white-space: nowrap;
+}
+.fm-btn:hover { background: #363b43; }
+.fm-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fm-btn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+.fm-close {
+    width: 26px; height: 26px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    color: #c7cad0; font-size: 15px; line-height: 1;
+    background: transparent; border: 1px solid transparent;
+}
+.fm-close:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+.fm-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+.fm-tree {
+    width: 210px;
+    flex: 0 0 auto;
+    border-right: 1px solid var(--line);
+    background: #1e2126;
+    overflow: auto;
+    padding: 7px 0;
+}
+.fm-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 25px;
+    padding: 0 8px;
+    color: #979da6;
+    white-space: nowrap;
+    cursor: default;
+}
+.fm-tree-row:hover { background: #262a31; color: #d7d9dd; }
+.fm-tree-row.active { background: #30353d; color: #fff; border-left: 2px solid var(--accent); padding-left: 6px; }
+.fm-tree-row .fm-caret { width: 12px; text-align: center; font-size: 9px; color: #7d838d; flex: 0 0 auto; }
+.fm-tree-row .fm-caret.leaf { visibility: hidden; }
+.fm-tree-row .fm-glyph { flex: 0 0 auto; opacity: .85; }
+.fm-tree-row span.fm-label { overflow: hidden; text-overflow: ellipsis; }
+.fm-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+.fm-toolbar {
+    height: 37px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    border-bottom: 1px solid var(--line);
+    gap: 6px;
+}
+.fm-toolbar .search.compact { max-width: 260px; }
+.fm-drop {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    position: relative;
+}
+.fm-drop.drag-over {
+    outline: 2px dashed var(--accent);
+    outline-offset: -6px;
+    background: rgba(228, 123, 53, 0.06);
+}
+.fm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 9px;
+    padding: 12px;
+}
+.fm-grid.list-view {
+    display: block;
+    padding: 6px;
+}
+.fm-card {
+    height: 108px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 6px;
+    text-align: center;
+    color: #a9aeb6;
+    position: relative;
+    cursor: default;
+}
+.fm-card:hover { background: #2a2e35; border-color: #3e444d; }
+.fm-card.selected { background: #303844; border-color: var(--accent); }
+.fm-card .fm-thumb {
+    height: 66px;
+    display: grid;
+    place-items: center;
+    background: #181a1f;
+    border: 1px solid #343942;
+    border-radius: 3px;
+    font-size: 24px;
+    color: #9ba1aa;
+    overflow: hidden;
+}
+.fm-card.type-folder .fm-thumb { color: var(--accent2); font-size: 26px; }
+.fm-card.type-image .fm-thumb { background: #fff repeating-conic-gradient(#c9cdd4 0% 25%, #ffffff 0% 50%) 50% / 12px 12px; }
+.fm-card.type-image .fm-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.fm-card.type-video .fm-thumb { color: #79b8e0; }
+.fm-card.type-code .fm-thumb { color: #7ac08d; }
+.fm-card span.fm-name {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 6px;
+    font-size: 10px;
+}
+.fm-card span.fm-meta {
+    display: block;
+    font-size: 9px;
+    color: #6d7480;
+}
+.fm-grid.list-view .fm-card {
+    height: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-align: left;
+    padding: 5px 8px;
+    border-radius: 3px;
+}
+.fm-grid.list-view .fm-card .fm-thumb { width: 28px; height: 28px; font-size: 14px; flex: 0 0 auto; }
+.fm-grid.list-view .fm-card span.fm-name { margin: 0; flex: 1; min-width: 0; }
+.fm-grid.list-view .fm-card span.fm-meta { flex: 0 0 auto; }
+.fm-empty {
+    grid-column: 1/-1;
+    color: var(--muted);
+    text-align: center;
+    padding: 40px 10px;
+    font-size: 11.5px;
+}
+.fm-status {
+    height: 26px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 10.5px;
+    background: #1a1d22;
+}
+
+/* --- In-viewport file tab pane (code / image / video / binary) --- */
+.fm-file-pane {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+}
+.fm-file-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--line);
+    background: #1c1f24;
+    font-size: 11.5px;
+    color: #b9bec6;
+}
+.fm-file-head .fm-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8d939d; }
+.fm-file-head .fm-btn.saved { opacity: .55; }
+.fm-file-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    position: relative;
+}
+.fm-image-view, .fm-binary-view {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 20px;
+    background: #101216;
+}
+.fm-image-view {
+    background: #14161a repeating-conic-gradient(#1c1f24 0% 25%, #14161a 0% 50%) 50% / 22px 22px;
+}
+.fm-image-view img {
+    max-width: 100%;
+    max-height: 100%;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5);
+    border-radius: 3px;
+}
+
+/* ---- Custom audio / video player (file preview pane) ---- */
+.fm-player {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: #101216;
+}
+.fm-player-video {
+    padding: 0;
+}
+.fm-player-video .fm-player-stage {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+}
+.fm-player-video .fm-player-media {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    cursor: pointer;
+    background: #000;
+}
+.fm-player-bigplay {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.25);
+    background: rgba(16,18,22,.55);
+    color: #fff;
+    font-size: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-left: 3px;
+    cursor: pointer;
+    transition: background .15s, transform .15s;
+    pointer-events: none;
+}
+.fm-player-video.is-playing .fm-player-bigplay { display: none; }
+.fm-player-video:not(.is-playing) .fm-player-bigplay { pointer-events: auto; }
+.fm-player-video:not(.is-playing) .fm-player-stage:hover .fm-player-bigplay {
+    background: rgba(228,123,53,.85);
+    transform: scale(1.06);
+}
+
+.fm-player-audio {
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 32px 24px 22px;
+}
+.fm-player-art {
+    width: 132px;
+    height: 132px;
+    border-radius: 16px;
+    background: linear-gradient(155deg, #262a31, #17191d);
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    box-shadow: 0 10px 30px rgba(0,0,0,.45);
+}
+.fm-player-art-glyph { font-size: 44px; color: var(--accent2); opacity: .9; }
+.fm-player-bars {
+    position: absolute;
+    bottom: 14px;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 4px;
+    height: 20px;
+}
+.fm-player-bars span {
+    width: 4px;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: .8;
+    transform: scaleY(.25);
+    transform-origin: bottom;
+    transition: transform .08s linear;
+}
+.fm-player-title {
+    max-width: 360px;
+    color: var(--text);
+    font-size: 12.5px;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fm-player-bar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    max-width: 640px;
+    padding: 8px 12px;
+    background: #1c1f24;
+    border-top: 1px solid var(--line);
+}
+.fm-player-video .fm-player-bar { max-width: none; border-radius: 0; }
+.fm-player-audio .fm-player-bar { border-radius: 8px; border: 1px solid var(--line); border-top: 1px solid var(--line); margin-top: 4px; }
+.fm-player-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+.fm-player-row-main { flex: 1; min-width: 0; }
+.fm-player-row-aux { flex: 0 0 auto; }
+.fm-player-btn {
+    flex: 0 0 auto;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: #262a31;
+    color: var(--text);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0 0 0 1px;
+    touch-action: manipulation;
+}
+.fm-player-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fm-player-time {
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 32px;
+}
+.fm-player-time.fm-player-cur { text-align: right; }
+/* Sizing for the seek/volume sliders. These reuse the app-wide
+   .fc-range-fill gradient-fill convention from forms.css (one input,
+   background painted via JS) rather than adding overlay elements.
+   Selectors are qualified with .fm-player-bar so they reliably win
+   over forms.css's plain `input[type="range"]` rule regardless of
+   stylesheet load order (equal specificity there is a tie broken by
+   source order, which forms.css — loaded after editor.css — would win). */
+.fm-player-bar input.fm-player-seek,
+.fm-player-bar input.fm-player-vol {
+    height: 5px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.fm-player-bar input.fm-player-seek { flex: 1; min-width: 40px; }
+.fm-player-bar input.fm-player-vol { width: 64px; flex: 0 0 auto; }
+.fm-player-bar input.fm-player-seek::-webkit-slider-thumb,
+.fm-player-bar input.fm-player-vol::-webkit-slider-thumb {
+    width: 11px;
+    height: 11px;
+    /* (track height 5px − thumb height 11px) / 2 — centers the thumb on the track */
+    margin-top: -3px;
+    border: 2px solid #fff2;
+}
+.fm-player-bar input.fm-player-seek::-moz-range-thumb,
+.fm-player-bar input.fm-player-vol::-moz-range-thumb {
+    width: 11px;
+    height: 11px;
+    border: none;
+}
+.fm-player-vol-group { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-right: 6px; }
+.fm-player-row-aux { gap: 16px; }
+.fm-player-rate {
+    flex: 0 0 auto;
+    /* background-color (not the `background` shorthand) so this doesn't
+       clobber the app-wide custom chevron background-image from
+       forms.css — using the shorthand here was what caused the select
+       to fall back to a broken/tiled native arrow. Chevron + no-repeat
+       + padding-right are re-declared explicitly too, so this control
+       doesn't depend on load order between stylesheets. */
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-color: #262a31;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238d939d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 7px center;
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 4px;
+    font-size: 10.5px;
+    padding: 3px 20px 3px 6px;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.fm-player-rate::-ms-expand { display: none; }
+
+/* ---- Mobile / touch friendliness ---- */
+@media (max-width: 560px), (pointer: coarse) {
+    .fm-player-bar {
+        flex-wrap: wrap;
+        row-gap: 10px;
+        padding: 10px 12px;
+    }
+    .fm-player-row-main { flex: 1 1 100%; }
+    .fm-player-row-aux { flex: 1 1 100%; justify-content: center; }
+    .fm-player-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 14px;
+    }
+    .fm-player-time {
+        font-size: 12px;
+        min-width: 38px;
+    }
+    .fm-player-bar input.fm-player-seek,
+    .fm-player-bar input.fm-player-vol {
+        height: 6px;
+    }
+    .fm-player-bar input.fm-player-seek::-webkit-slider-thumb,
+    .fm-player-bar input.fm-player-vol::-webkit-slider-thumb {
+        width: 18px;
+        height: 18px;
+        margin-top: -6px; /* (track 6px − thumb 18px) / 2 */
+        border-width: 3px;
+    }
+    .fm-player-bar input.fm-player-seek::-moz-range-thumb,
+    .fm-player-bar input.fm-player-vol::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+    }
+    .fm-player-bar input.fm-player-vol { width: 96px; }
+    .fm-player-rate {
+        /* 16px avoids iOS Safari auto-zooming the page on focus */
+        font-size: 16px;
+        padding: 6px 26px 6px 10px;
+        min-height: 34px;
+    }
+    .fm-player-vol-group { gap: 8px; }
+    .fm-player-art { width: 108px; height: 108px; }
+    .fm-player-bigplay { width: 56px; height: 56px; font-size: 20px; }
+}
+.fm-binary-view {
+    flex-direction: column;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+}
+.fm-binary-view .fm-binary-glyph { font-size: 40px; color: #7d838d; }
+
+/* The File Manager overlay uses backdrop-filter, which forces its whole
+   subtree into one stacking context above most of the app (z-index 700).
+   #fmContextMenu is appended to <body> (a sibling of that stacking
+   context, not a descendant) so it needs its own z-index higher than the
+   overlay's, or right-click actions become unclickable while the File
+   Manager is open — the overlay's own contents paint on top of it even
+   though the menu is visually present. */
+#fmContextMenu { z-index: 750; }
+
+/* --- File Manager as a picker (Assets panel's Import button opens this
+   instead of a native OS dialog, so imports can pull from files already
+   in the project — see forge-filemanager.js's __forgeOpenFilePicker). --- */
+.fm-picker-bar {
+    height: 38px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    border-top: 1px solid var(--line);
+    background: #1e2126;
+    font-size: 11px;
+    color: var(--muted);
+}
+.fm-card.fm-pick-target { cursor: default; }
+.fm-card .fm-pick-check {
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    border: 1px solid #565c66;
+    background: #1a1d22;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: transparent;
+    z-index: 1;
+}
+.fm-card.fm-pick-checked .fm-pick-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fm-card.fm-pick-disabled { opacity: .4; }
