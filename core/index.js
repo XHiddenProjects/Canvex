@@ -157,15 +157,29 @@ app.post("/api/play/session/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
+function requireValidSlug(slug) {
+  const value = String(slug || "");
+  if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(value)) {
+    const error = new Error("Invalid game identifier");
+    error.status = 400;
+    throw error;
+  }
+  return value;
+}
+
 app.post("/api/play/:slug/stats", async (req, res, next) => {
   try {
+    const slug = requireValidSlug(req.params.slug);
     const identity = (await playerManager.resolveSession(ROOT, req)) || playerManager.createGuest(res);
-    res.json({ entry: await submitStat(ROOT, req.params.slug, identity, req.body || {}) });
+    res.json({ entry: await submitStat(ROOT, slug, identity, req.body || {}) });
   } catch (error) { next(error); }
 });
 
 app.get("/api/play/:slug/leaderboard", async (req, res, next) => {
-  try { res.json({ leaderboard: await readLeaderboard(ROOT, req.params.slug, req.query.key, req.query.limit) }); }
+  try {
+    const slug = requireValidSlug(req.params.slug);
+    res.json({ leaderboard: await readLeaderboard(ROOT, slug, req.query.key, req.query.limit) });
+  }
   catch (error) { next(error); }
 });
 
